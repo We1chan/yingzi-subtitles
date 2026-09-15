@@ -10,7 +10,7 @@ import time
 import traceback
 from pathlib import Path
 
-from .config import CACHE, ROOT, model_paths, model_issue, readiness
+from .config import CACHE, ROOT, model_paths, model_issue, readiness, asr_backend, asr_language_issue, extra_runtime_ready
 from .media import extract_audio, read_span, speech_chunks
 from .subtitles import Cue, aligned_cues, atomic_write, load_project, render, save_project, validate, needs_translation
 
@@ -66,6 +66,11 @@ def process(job):
         missing = [f'{name}：{issue}' for name, key in [('语音识别', 'asr_model'), ('时间轴对齐', 'align_model')] if (issue := model_issue(paths[key], key))]
         if missing:
             raise ValueError('所选模型不可用：' + '；'.join(missing) + '。请打开“选择模型”检查。')
+        backend = asr_backend(paths['asr_model'])
+        if issue := asr_language_issue(paths['asr_model'], job.get('language')):
+            raise ValueError(issue)
+        if backend != 'qwen' and not extra_runtime_ready():
+            raise ValueError('扩展识别引擎未安装。请打开“选择模型”，下载缺失的内置模型及运行环境。')
         progress(1, '提取视频音轨')
         (CACHE / 'jobs').mkdir(exist_ok=True)
         with tempfile.TemporaryDirectory(prefix='job-', dir=CACHE / 'jobs') as work:
@@ -76,20 +81,32 @@ def process(job):
             if not spans:
                 raise ValueError('所选音轨未检测到人声。请检查音轨或视频内容。')
             progress(15, f'加载 {paths["asr_model"].name}，共 {len(spans)} 个语音片段')
-            from qwen_asr import Qwen3ASRModel, Qwen3ForcedAligner
-            model = Qwen3ASRModel.from_pretrained(str(paths['asr_model']), max_inference_batch_size=1, max_new_tokens=512, **load_options(device))
             records = []
-            for i, (start, end) in enumerate(spans):
-                result = model.transcribe(audio=read_span(wav, start, end), language=job.get('language') or None, context=job.get('context', ''))[0]
-                if result.text.strip():
-                    records.append({'start': start, 'end': end, 'text': result.text.strip(), 'language': result.language})
+            def store_record(i, record):
+                if record['text'].strip():
+                    records.append(record)
                 progress(16 + 37 * (i + 1) / len(spans), f'识别语音 {i + 1}/{len(spans)}')
-                atomic_write(out / 'recognition.json', json.dumps({'video': str(video), 'duration': duration, 'records': records}, ensure_ascii=False, indent=2))
-            del model
-            release()
+                atomic_write(out / 'recognition.json', json.dumps({'video': str(video), 'duration': duration, 'backend': backend, 'records': records}, ensure_ascii=False, indent=2))
+            if backend == 'qwen':
+                from qwen_asr import Qwen3ASRModel
+                model = Qwen3ASRModel.from_pretrained(str(paths['asr_model']), max_inference_batch_size=1, max_new_tokens=512, **load_options(device))
+                for i, (start, end) in enumerate(spans):
+                    result = model.transcribe(audio=read_span(wav, start, end), language=job.get('language') or None, context=job.get('context', ''))[0]
+                    store_record(i, {'start': start, 'end': end, 'text': result.text.strip(), 'language': result.language})
+                del model
+                release()
+            else:
+                from .asr_process import external_records
+                for message in external_records(job, wav, spans):
+                    if message['type'] == 'record':
+                        message['record']['inference_seconds'] = message['seconds']
+                        store_record(message['index'], message['record'])
+                    elif message['type'] == 'backend':
+                        event('backend', **{key: value for key, value in message.items() if key != 'type'})
             if not records:
                 raise ValueError('检测到了声音，但未识别出文字。请确认音轨与语言设置。')
             progress(54, '加载时间轴模型，逐字对齐语音')
+            from qwen_asr import Qwen3ForcedAligner
             aligner = Qwen3ForcedAligner.from_pretrained(str(paths['align_model']), **load_options(device))
             supported = {'Chinese', 'Japanese', 'English', 'Cantonese', 'French', 'German', 'Italian', 'Korean', 'Portuguese', 'Russian', 'Spanish'}
             for i, item in enumerate(records):

@@ -13,11 +13,48 @@ ALIGN_PATH = MODELS / 'Qwen3-ForcedAligner-0.6B'
 TRANSLATE_PATH = MODELS / 'Qwen3-4B-Instruct-2507-Q4_K_M.gguf'
 SETTINGS = ROOT / 'settings.json'
 MODEL_DEFAULTS = {'asr_model': ASR_PATH, 'align_model': ALIGN_PATH, 'translation_model': TRANSLATE_PATH}
-ASR_PRESETS = {'Qwen3-ASR-1.7B': 'asr', 'Qwen3-ASR-0.6B': 'asr-small'}
+ASR_PRESETS = {'Qwen3-ASR-1.7B': 'asr', 'Qwen3-ASR-0.6B': 'asr-small',
+    'cohere-transcribe-03-2026': 'cohere', 'parakeet-tdt-0.6b-v2-onnx': 'parakeet'}
+EXTRA_PYTHON = RUNTIME / 'asr-env' / 'Scripts' / 'python.exe'
+
+
+def asr_backend(path):
+    path = Path(path)
+    try:
+        kind = json.loads((path / 'config.json').read_text(encoding='utf-8')).get('model_type')
+    except (OSError, ValueError, AttributeError):
+        kind = None
+    if kind == 'cohere_asr' or path.name == 'cohere-transcribe-03-2026':
+        return 'cohere'
+    if kind == 'nemo-conformer-tdt' or path.name == 'parakeet-tdt-0.6b-v2-onnx':
+        return 'parakeet'
+    return 'qwen'
+
+
+def asr_language_issue(path, language):
+    backend = asr_backend(path)
+    if backend == 'cohere' and language not in {'Chinese', 'Japanese', 'English'}:
+        return 'Cohere 需要手动选择视频语言：中文、日语或英语'
+    if backend == 'parakeet' and language != 'English':
+        return 'Parakeet v2 仅识别英语，请选择英语或切换识别模型'
+    return ''
+
+
+def asr_description(path):
+    return {'qwen': '中 / 日 / 英，可自动检测语言，支持术语提示',
+        'cohere': '中 / 日 / 英，需手动指定语言；时间轴使用所选对齐模型',
+        'parakeet': '仅英语；快速识别，时间轴使用所选对齐模型'}[asr_backend(path)]
+
+
+def extra_runtime_ready():
+    return EXTRA_PYTHON.is_file() and (RUNTIME / 'asr-env' / '.ready').is_file()
 
 for directory in (MODELS, CACHE, OUTPUT, RUNTIME, LOGS):
     directory.mkdir(parents=True, exist_ok=True)
 
+# Keep CLI login discoverable after moving inference caches into the project.
+hf_login_home = Path(os.environ.get('HF_HOME', str(Path(os.environ.get('XDG_CACHE_HOME', str(Path.home() / '.cache'))) / 'huggingface'))).expanduser()
+os.environ.setdefault('HF_TOKEN_PATH', str(hf_login_home / 'token'))
 os.environ.setdefault('HF_HOME', str(CACHE / 'huggingface'))
 os.environ.setdefault('TORCH_HOME', str(CACHE / 'torch'))
 os.environ.setdefault('HF_HUB_OFFLINE', '1')
@@ -78,12 +115,24 @@ def model_issue(path, kind):
         if not path.is_dir():
             return '模型目录不存在，请先下载或选择本地目录'
         config = json.loads((path / 'config.json').read_text(encoding='utf-8'))
-        if not isinstance(config, dict) or config.get('model_type') != 'qwen3_asr':
-            return '请选择兼容 qwen-asr 的 Qwen3 模型目录'
+        if not isinstance(config, dict):
+            return '模型配置无效'
+        model_type = config.get('model_type')
+        if kind == 'asr_model' and model_type == 'nemo-conformer-tdt':
+            required = ['encoder-model.onnx', 'encoder-model.onnx.data', 'decoder_joint-model.onnx', 'vocab.txt', 'nemo128.onnx']
+            for name in required:
+                file = path / name
+                if not file.is_file() or file.stat().st_size == 0:
+                    return f'模型文件缺失：{name}'
+            return ''
+        if model_type != 'qwen3_asr' and not (kind == 'asr_model' and model_type == 'cohere_asr'):
+            return '识别支持 Qwen3-ASR、Cohere Transcribe、Parakeet v2 ONNX；对齐需 Qwen3-ForcedAligner'
         is_aligner = 'timestamp_token_id' in config
         if is_aligner != (kind == 'align_model'):
             return '识别模型与时间轴对齐模型不能互换'
         required = ['tokenizer_config.json', 'preprocessor_config.json']
+        if model_type == 'cohere_asr':
+            required.append('processor_config.json')
         required.extend(['tokenizer.json'] if (path / 'tokenizer.json').is_file() else ['vocab.json', 'merges.txt'])
         index = path / 'model.safetensors.index.json'
         if index.exists():
@@ -104,9 +153,12 @@ def model_issue(path, kind):
 
 def readiness(options=None):
     paths = model_paths(options)
-    return {
+    state = {
         '语音识别': not model_issue(paths['asr_model'], 'asr_model'),
         '时间轴对齐': not model_issue(paths['align_model'], 'align_model'),
         '字幕翻译': not model_issue(paths['translation_model'], 'translation_model'),
         '翻译引擎': server_path().exists(),
     }
+    if asr_backend(paths['asr_model']) != 'qwen':
+        state['扩展识别引擎'] = extra_runtime_ready()
+    return state

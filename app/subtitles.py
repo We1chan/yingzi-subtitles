@@ -165,6 +165,15 @@ def aligned_cues(text, items, offset=0.0, duration=None, max_chars=30, max_secon
             gap = i + 1 < len(boundaries) and boundaries[i + 1][1] - end > 0.5
             if gap or (sentence_end(section, language) and elapsed >= 0.8):
                 break
+        # Keep a final Japanese particle with a word, instead of flashing “が。” alone.
+        if language == 'Japanese' and first < last < len(boundaries) - 1:
+            tail = text[boundaries[last][0]:].strip()
+            if len(normalized_chars(tail)[0]) <= 1 and not sentence_end(text[char_start:boundaries[last][0]], language):
+                candidate = last - 1
+                new_tail = text[boundaries[candidate][0]:].strip()
+                if (len(new_tail) <= max_chars and boundaries[-1][2] - boundaries[last][1] <= max_seconds
+                        and boundaries[last][1] - boundaries[candidate][2] <= .5):
+                    last = candidate
         char_end, _, end = boundaries[last]
         cue_start = max(0.0, boundaries[first][1])
         cue_end = max(cue_start + 0.08, end)

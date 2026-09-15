@@ -56,3 +56,48 @@ def test_settings_persist_external_paths_and_preserve_other_preferences(tmp_path
 
 def test_legacy_jobs_keep_original_defaults():
     assert config.model_paths({}) == config.MODEL_DEFAULTS
+
+
+def test_cohere_snapshot_is_asr_only_and_requires_explicit_language(tmp_path):
+    path = snapshot(tmp_path / 'cohere')
+    (path / 'config.json').write_text('{"model_type":"cohere_asr"}')
+    (path / 'processor_config.json').write_text('{}')
+    assert config.asr_backend(path) == 'cohere'
+    assert config.model_issue(path, 'asr_model') == ''
+    assert config.model_issue(path, 'align_model')
+    assert config.asr_language_issue(path, '')
+    assert config.asr_language_issue(path, 'Japanese') == ''
+
+
+def test_parakeet_requires_external_onnx_weights_and_english(tmp_path):
+    path = tmp_path / 'parakeet'
+    path.mkdir()
+    (path / 'config.json').write_text('{"model_type":"nemo-conformer-tdt"}')
+    for name in ['encoder-model.onnx', 'decoder_joint-model.onnx', 'vocab.txt', 'nemo128.onnx']:
+        (path / name).write_bytes(b'asset')
+    assert 'encoder-model.onnx.data' in config.model_issue(path, 'asr_model')
+    (path / 'encoder-model.onnx.data').write_bytes(b'weights')
+    assert config.model_issue(path, 'asr_model') == ''
+    assert config.model_issue(path, 'align_model')
+    assert config.asr_language_issue(path, 'English') == ''
+    assert config.asr_language_issue(path, 'Japanese')
+    assert config.asr_language_issue(path, '')
+
+
+def test_extra_runtime_is_required_only_for_new_engines(monkeypatch):
+    monkeypatch.setattr(config, 'model_issue', lambda *args: '')
+    monkeypatch.setattr(config, 'extra_runtime_ready', lambda: False)
+    assert '扩展识别引擎' not in config.readiness({})
+    assert config.readiness({'asr_model': 'models/cohere-transcribe-03-2026'})['扩展识别引擎'] is False
+
+
+def test_model_download_redirect_does_not_forward_hf_credential():
+    from urllib.request import Request
+    from tools.download_assets import SafeRedirect
+    original = Request('https://huggingface.co/model/file', headers={'Authorization': 'Bearer test-only', 'Range': 'bytes=12-'})
+    handler = SafeRedirect()
+    cross_host = handler.redirect_request(original, None, 302, 'Found', {}, 'https://cdn.example/model')
+    assert cross_host.get_header('Authorization') is None
+    assert cross_host.get_header('Range') == 'bytes=12-'
+    same_host = handler.redirect_request(original, None, 302, 'Found', {}, 'https://huggingface.co/new-path')
+    assert same_host.get_header('Authorization') == 'Bearer test-only'

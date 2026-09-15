@@ -111,3 +111,26 @@ def test_model_download_process_updates_log_and_unlocks_selection(app, monkeypat
     assert dialog.selectors['asr_model'].isEnabled()
     assert dialog.buttons.button(QDialogButtonBox.Save).isEnabled()
     dialog.close()
+
+
+def test_new_models_are_selectable_and_wrong_language_blocks_generation(app, tmp_path, monkeypatch):
+    from app.config import MODELS
+    from app.model_dialog import ModelDialog
+    dialog = ModelDialog({})
+    for name in ['cohere-transcribe-03-2026', 'parakeet-tdt-0.6b-v2-onnx']:
+        assert dialog.selectors['asr_model'].findData(str((MODELS / name).resolve())) >= 0
+    dialog.close()
+    window = Studio()
+    monkeypatch.setattr('app.gui.readiness', lambda options: {'语音识别': True, '时间轴对齐': True, '字幕翻译': True, '翻译引擎': True, '扩展识别引擎': True})
+    window.video = tmp_path / 'video.mp4'
+    window.model_selection['asr_model'] = str(MODELS / 'parakeet-tdt-0.6b-v2-onnx')
+    window.language.setCurrentIndex(window.language.findData('Japanese'))
+    window.refresh_models()
+    assert not window.start_button.isEnabled()
+    assert '仅识别英语' in window.model_status.text()
+    window.language.setCurrentIndex(window.language.findData('English'))
+    assert window.start_button.isEnabled()
+    window.model_selection['asr_model'] = str(MODELS / 'cohere-transcribe-03-2026')
+    window.language.setCurrentIndex(0)
+    assert not window.start_button.isEnabled()
+    window.close()

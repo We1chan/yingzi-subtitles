@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QFrame, QLabe
     QSplitter, QGraphicsView, QGraphicsScene, QGraphicsTextItem, QAbstractItemView,
     QPlainTextEdit, QDialog, QStyle)
 
-from .config import ROOT, CACHE, OUTPUT, LOGS, readiness, load_model_selection, save_model_selection, MODEL_DEFAULTS
+from .config import ROOT, CACHE, OUTPUT, LOGS, readiness, load_model_selection, save_model_selection, MODEL_DEFAULTS, asr_language_issue, asr_backend
 from .media import audio_tracks, CREATE_NO_WINDOW
 from .subtitles import Cue, timestamp, parse_time, validate, render, atomic_write, load_project, save_project, subtitle_text, needs_translation
 
@@ -372,15 +372,19 @@ class Studio(QMainWindow):
         state = readiness(self.model_selection)
         count = sum(state.values())
         name = Path(self.model_selection['asr_model']).name
-        self.model_status.setText(f'{name}\n' + ('●  本地模型已就绪' if count == 4 else f'模型准备中：{count} / 4 项就绪'))
+        issue = asr_language_issue(self.model_selection['asr_model'], self.language.currentData())
+        self.model_status.setText(f'{name}\n' + (issue or ('●  本地模型已就绪' if count == len(state) else f'模型准备中：{count} / {len(state)} 项就绪')))
         self.model_status.setToolTip('\n'.join(f'{name}：' + ('已就绪' if ready else '待下载') for name, ready in state.items()))
-        self.start_button.setEnabled(self.video is not None and not self.busy() and state['语音识别'] and state['时间轴对齐'])
+        self.start_button.setEnabled(self.video is not None and not self.busy() and state['语音识别'] and state['时间轴对齐'] and state.get('扩展识别引擎', True) and not issue)
+        self.context.setPlaceholderText('可选：人名、地名、专业词汇' if asr_backend(self.model_selection['asr_model']) == 'qwen' else '当前识别模型不支持术语提示')
+        self.context.setEnabled(not self.busy() and asr_backend(self.model_selection['asr_model']) == 'qwen')
 
     def language_changed(self):
         if self.language.currentData() == 'English' and self.max_chars.value() == 30:
             self.max_chars.setValue(68)
         elif self.language.currentData() != 'English' and self.max_chars.value() == 68:
             self.max_chars.setValue(30)
+        self.refresh_models()
 
     def choose_models(self):
         if self.busy():
@@ -513,6 +517,10 @@ class Studio(QMainWindow):
 
     def start_job(self):
         if not self.video or self.busy():
+            return
+        issue = asr_language_issue(self.model_selection['asr_model'], self.language.currentData())
+        if issue:
+            self.notify(issue, error=True)
             return
         folder = OUTPUT / f'{self.video.stem[:45]}_{time.strftime("%Y%m%d_%H%M%S")}_{uuid.uuid4().hex[:4]}'
         job = {**self.current_options(), 'video': str(self.video), 'output': str(folder)}

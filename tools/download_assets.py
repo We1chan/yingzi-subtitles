@@ -9,6 +9,7 @@ import sys
 import time
 import urllib.parse
 import urllib.request
+import urllib.error
 import zipfile
 import zlib
 from pathlib import Path
@@ -18,8 +19,22 @@ MODELS = ROOT / 'models'
 RUNTIME = ROOT / 'runtime'
 
 
+class SafeRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, response_headers, newurl):
+        redirected = super().redirect_request(req, fp, code, msg, response_headers, newurl)
+        if redirected and urllib.parse.urlparse(newurl).hostname != urllib.parse.urlparse(req.full_url).hostname:
+            redirected.remove_header('Authorization')
+        return redirected
+
+
 def request(url, headers=None):
-    return urllib.request.urlopen(urllib.request.Request(url, headers={'User-Agent': 'Yingzi-Setup/1.0', **(headers or {})}), timeout=90)
+    auth = {}
+    if urllib.parse.urlparse(url).hostname == 'huggingface.co':
+        from huggingface_hub import get_token
+        token = get_token()
+        if token:
+            auth['Authorization'] = f'Bearer {token}'
+    return urllib.request.build_opener(SafeRedirect()).open(urllib.request.Request(url, headers={'User-Agent': 'Yingzi-Setup/1.0', **auth, **(headers or {})}), timeout=90)
 
 
 def json_url(url):
@@ -60,6 +75,8 @@ def download(url, dest, size=None, sha256=None):
             print(f'Complete: {dest.name}', flush=True)
             return
         except Exception as exc:
+            if isinstance(exc, urllib.error.HTTPError) and exc.code in (401, 403):
+                raise RuntimeError('模型下载需要访问授权：请在 Hugging Face 官方模型页接受条件，并在本机运行 .venv\\Scripts\\hf.exe auth login。令牌不要写入工程或日志。') from None
             print(f'Retry {attempt + 1}: {dest.name}: {exc}', flush=True)
             if attempt == 5:
                 raise
@@ -74,14 +91,14 @@ def digest(path):
     return value.hexdigest()
 
 
-def snapshot(repo, dirname):
+def snapshot(repo, dirname, extensions=('.json', '.safetensors', '.txt', '.model', '.md'), exclude=()):
     target = MODELS / dirname
     if (target / '.complete').exists():
         revision = json.loads((target / '.complete').read_text(encoding='utf-8'))['revision']
     else:
         revision = json_url(f'https://huggingface.co/api/models/{repo}')['sha']
     entries = json_url(f'https://huggingface.co/api/models/{repo}/tree/{revision}?recursive=true&limit=1000')
-    wanted = [e for e in entries if e['type'] == 'file' and '/' not in e['path'] and e['path'].endswith(('.json', '.safetensors', '.txt', '.model', '.md'))]
+    wanted = [e for e in entries if e['type'] == 'file' and '/' not in e['path'] and e['path'].endswith(extensions) and not any(part in e['path'] for part in exclude)]
     print(f'Snapshot {repo}@{revision}: {len(wanted)} files', flush=True)
     def fetch(entry):
         download(f"https://huggingface.co/{repo}/resolve/{revision}/{entry['path']}", target / entry['path'], entry.get('size'), entry.get('lfs', {}).get('oid'))
@@ -140,8 +157,9 @@ def install_runtime_archive(name, expected, folder):
 
 if __name__ == '__main__':
     sys.stdout.reconfigure(encoding='utf-8')
-    tasks = {'asr': lambda: snapshot('Qwen/Qwen3-ASR-1.7B', 'Qwen3-ASR-1.7B'), 'asr-small': lambda: snapshot('Qwen/Qwen3-ASR-0.6B', 'Qwen3-ASR-0.6B'), 'align': lambda: snapshot('Qwen/Qwen3-ForcedAligner-0.6B', 'Qwen3-ForcedAligner-0.6B'), 'translate': translation, 'runtime': runtime}
+    tasks = {'asr': lambda: snapshot('Qwen/Qwen3-ASR-1.7B', 'Qwen3-ASR-1.7B'), 'asr-small': lambda: snapshot('Qwen/Qwen3-ASR-0.6B', 'Qwen3-ASR-0.6B'), 'cohere': lambda: snapshot('CohereLabs/cohere-transcribe-03-2026', 'cohere-transcribe-03-2026'), 'parakeet': lambda: snapshot('istupakov/parakeet-tdt-0.6b-v2-onnx', 'parakeet-tdt-0.6b-v2-onnx', ('.json', '.onnx', '.data', '.txt', '.md'), ('.int8.',)), 'align': lambda: snapshot('Qwen/Qwen3-ForcedAligner-0.6B', 'Qwen3-ForcedAligner-0.6B'), 'translate': translation, 'runtime': runtime}
     selected = sys.argv[1:] or ['asr', 'align', 'translate', 'runtime']
+    tasks['extra-runtime'] = lambda: subprocess.run([sys.executable, '-u', str(ROOT / 'tools' / 'setup_extra.py')], check=True, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
     with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
         futures = {pool.submit(tasks[name]): name for name in selected}
         for future in concurrent.futures.as_completed(futures):

@@ -8,7 +8,7 @@ from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel, QCombo
     QPushButton, QFileDialog, QPlainTextEdit, QDialogButtonBox)
 
 from .config import (ROOT, MODELS, MODEL_DEFAULTS, ASR_PRESETS, model_paths,
-    model_issue, server_path)
+    model_issue, server_path, asr_backend, asr_description, extra_runtime_ready)
 from .media import CREATE_NO_WINDOW
 
 
@@ -21,7 +21,7 @@ class ModelDialog(QDialog):
         self.selectors, self.details, self.browse_buttons = {}, {}, []
         layout = QVBoxLayout(self)
         layout.setSpacing(12)
-        intro = QLabel('识别支持 Qwen3-ASR 1.7B / 0.6B 及兼容模型；翻译支持 llama.cpp 可加载的聊天型 GGUF。\n模型在本机运行。可浏览本地文件，或下载下方选中的内置模型。')
+        intro = QLabel('识别支持 Qwen3-ASR、Cohere Transcribe 和 Parakeet v2；翻译支持聊天型 GGUF。\n模型在本机运行。可浏览本地文件，或下载选中的内置模型及运行环境。')
         intro.setWordWrap(True)
         layout.addWidget(intro)
         paths = model_paths(selection)
@@ -86,7 +86,7 @@ class ModelDialog(QDialog):
         if key == 'translation_model':
             filename, _ = QFileDialog.getOpenFileName(self, '选择聊天型 GGUF 翻译模型', str(MODELS), 'GGUF 模型 (*.gguf)')
         else:
-            filename = QFileDialog.getExistingDirectory(self, '选择 Qwen3 模型目录', str(MODELS))
+            filename = QFileDialog.getExistingDirectory(self, '选择本地模型目录', str(MODELS))
         if filename:
             self.selectors[key].setCurrentIndex(self.add_path(key, filename))
             self.refresh()
@@ -104,12 +104,17 @@ class ModelDialog(QDialog):
                 tasks.append('align' if key == 'align_model' else 'translate')
         if not server_path().is_file():
             tasks.append('runtime')
+        if asr_backend(model_paths(self.selection())['asr_model']) != 'qwen' and not extra_runtime_ready():
+            tasks.append('extra-runtime')
         return tasks
 
     def refresh(self):
         for key, path in model_paths(self.selection()).items():
             issue = model_issue(path, key)
-            self.details[key].setText(f'{path}\n' + (issue or '已就绪'))
+            description = (asr_description(path) + '\n') if key == 'asr_model' else ''
+            if key == 'asr_model' and asr_backend(path) != 'qwen' and not extra_runtime_ready():
+                issue = (issue + '；' if issue else '') + '需下载扩展识别引擎'
+            self.details[key].setText(f'{path}\n' + description + (issue or '已就绪'))
             self.details[key].setStyleSheet('font-size: 12px; color: ' + ('#B54B43;' if issue else '#237361;'))
         self.download.setEnabled(bool(self.download_tasks()) and not self.downloading())
 

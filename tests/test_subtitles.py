@@ -83,3 +83,32 @@ def test_english_word_spacing_apostrophes_and_sentence_breaks():
     assert cues[1].start == 11.6
     short = aligned_cues(' '.join(words), items, language='English', max_chars=16)
     assert ' '.join(cue.text for cue in short) == ' '.join(words)
+
+
+def test_japanese_short_final_particle_keeps_a_word_and_character_limit():
+    cues = aligned_cues('そういう姿勢が。', [token('そういう', 0, 1), token('姿勢', 1, 1.7), token('が', 1.7, 1.9)], max_chars=7, language='Japanese')
+    assert [cue.text for cue in cues] == ['そういう', '姿勢が。']
+    assert all(len(cue.text) <= 7 for cue in cues)
+
+
+def test_translation_retries_punctuation_only_rows_and_keeps_context():
+    import io
+    import json
+    from app.translation import LocalTranslator
+    translator = LocalTranslator()
+    translator.port = 1234
+    payloads = []
+    def respond(request, timeout):
+        data = json.loads(request.data)
+        content = json.loads(data['messages'][1]['content'])
+        payloads.append(content)
+        rows = content['subtitles']
+        assert len(rows) == 1
+        answer = [{'id': row['id'], 'text': '。' if len(payloads) % 2 else '需要购买。'} for row in rows]
+        return io.BytesIO(json.dumps({'choices': [{'finish_reason': 'stop', 'message': {'content': json.dumps({'translations': answer})}}]}).encode())
+    translator.client.open = respond
+    result = translator.translate([{'id': 1, 'text': 'マレーシア'}, {'id': 2, 'text': 'から買わなくてはならないのです。'}], 'context')
+    assert result == {1: '需要购买。', 2: '需要购买。'}
+    assert payloads[-1]['previous_context'] == 'context\nマレーシア'
+    assert '買わなくてはならない' in payloads[0]['following_context']
+    assert len(payloads) == 4

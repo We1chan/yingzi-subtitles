@@ -1,0 +1,8 @@
+# Isolated runtime/asr-env; keep the main Qwen environment on Transformers 4.
+transformers==5.4.0
+onnx-asr==0.12.0
+# CUDA 12 build, matching PyTorch 2.8 cu128 (ORT 1.30 defaults to CUDA 13).
+onnxruntime-gpu==1.23.2
+accelerate>=1,<2
+soundfile>=0.13,<1
+librosa>=0.11,<1
