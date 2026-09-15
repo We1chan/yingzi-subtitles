@@ -40,3 +40,74 @@ def test_preview_escapes_caption_markup(app):
     window.position_changed(2200)
     assert window.preview.caption.toPlainText() == ''
     window.close()
+
+
+def test_english_project_restores_models_and_invalidates_edited_translation(app, tmp_path, monkeypatch):
+    project = tmp_path / 'english.yingzi.json'
+    selection = {'asr_model': str(tmp_path / 'asr06'), 'translation_model': str(tmp_path / 'chat.gguf')}
+    save_project(project, str(tmp_path / 'missing.mp4'), [Cue(1, 2, 'Hello.', '你好。', 'English')], {'language': 'English', 'max_chars': 68, **selection})
+    window = Studio()
+    window.load_saved_project(project)
+    assert window.language.currentData() == 'English'
+    assert window.max_chars.value() == 68
+    assert window.current_options()['asr_model'] == selection['asr_model']
+    window.table.item(0, 3).setText('Good morning.')
+    assert window.retry.isEnabled()
+    notices = []
+    monkeypatch.setattr('app.gui.QMessageBox.information', lambda *args: notices.append(args[2]))
+    window.export()
+    assert notices and '英语' in notices[0]
+    jobs = []
+    monkeypatch.setattr(window, 'launch', jobs.append)
+    window.retry_translation()
+    assert jobs[0]['translation_model'] == selection['translation_model']
+    assert jobs[0]['language'] == 'English'
+    _, cues = load_project(project)
+    assert cues[0].text == 'Good morning.' and not cues[0].translation
+    window.close()
+
+
+def test_model_dialog_selects_presets_and_remembers_browsed_paths(app, tmp_path, monkeypatch):
+    from app.model_dialog import ModelDialog
+    from app.config import MODELS
+    custom = tmp_path / '手选模型.gguf'
+    custom.write_bytes(b'GGUF' + b'\x00' * 32)
+    dialog = ModelDialog({})
+    combo = dialog.selectors['asr_model']
+    index = combo.findData(str((MODELS / 'Qwen3-ASR-0.6B').resolve()))
+    assert index >= 0
+    combo.setCurrentIndex(index)
+    monkeypatch.setattr('app.model_dialog.QFileDialog.getOpenFileName', lambda *args: (str(custom), ''))
+    dialog.browse('translation_model')
+    assert dialog.selection()['translation_model'] == str(custom.resolve())
+    assert dialog.selection()['asr_model'].endswith('Qwen3-ASR-0.6B')
+    assert dialog.details['translation_model'].text().endswith('已就绪')
+    dialog.close()
+
+
+def test_model_download_process_updates_log_and_unlocks_selection(app, monkeypatch):
+    import sys
+    from PySide6.QtCore import QProcess, QEventLoop, QTimer
+    from PySide6.QtWidgets import QDialogButtonBox
+    from app.model_dialog import ModelDialog
+    class DownloadProcess(QProcess):
+        def start(self, program, args):
+            assert args[-1] == 'asr-small'
+            super().start(sys.executable, ['-u', '-c', "import sys; sys.stdout.reconfigure(encoding='utf-8'); print('下载测试完成')"])
+    monkeypatch.setattr('app.model_dialog.QProcess', DownloadProcess)
+    dialog = ModelDialog({})
+    monkeypatch.setattr(dialog, 'download_tasks', lambda: ['asr-small'])
+    dialog.download_missing()
+    assert not dialog.selectors['asr_model'].isEnabled()
+    loop = QEventLoop()
+    dialog.process.finished.connect(loop.quit)
+    timer = QTimer()
+    timer.setSingleShot(True)
+    timer.timeout.connect(loop.quit)
+    timer.start(5000)
+    loop.exec()
+    assert not dialog.downloading()
+    assert '下载测试完成' in dialog.log.toPlainText()
+    assert dialog.selectors['asr_model'].isEnabled()
+    assert dialog.buttons.button(QDialogButtonBox.Save).isEnabled()
+    dialog.close()

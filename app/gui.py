@@ -17,9 +17,9 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QFrame, QLabe
     QSplitter, QGraphicsView, QGraphicsScene, QGraphicsTextItem, QAbstractItemView,
     QPlainTextEdit, QDialog, QStyle)
 
-from .config import ROOT, CACHE, OUTPUT, LOGS, readiness
+from .config import ROOT, CACHE, OUTPUT, LOGS, readiness, load_model_selection, save_model_selection, MODEL_DEFAULTS
 from .media import audio_tracks, CREATE_NO_WINDOW
-from .subtitles import Cue, timestamp, parse_time, validate, render, atomic_write, load_project, save_project, subtitle_text
+from .subtitles import Cue, timestamp, parse_time, validate, render, atomic_write, load_project, save_project, subtitle_text, needs_translation
 
 
 STYLE = '''
@@ -164,6 +164,7 @@ class Studio(QMainWindow):
         self.terminal_event = False
         self.loading_table = False
         self.active_cue = -1
+        self.model_selection = load_model_selection()
         self.setWindowTitle('映字 · 本地双语字幕工作台')
         self.setWindowIcon(make_icon())
         self.resize(1340, 920)
@@ -262,12 +263,12 @@ class Studio(QMainWindow):
         config.addSpacing(4)
         config.addWidget(label('视频语言', 'muted'))
         self.language = QComboBox()
-        for title, value in [('自动识别（中文 / 日语）', ''), ('日语', 'Japanese'), ('中文', 'Chinese')]:
+        for title, value in [('自动识别（中 / 日 / 英）', ''), ('日语', 'Japanese'), ('中文', 'Chinese'), ('英语', 'English')]:
             self.language.addItem(title, value)
         config.addWidget(self.language)
         config.addWidget(label('字幕内容', 'muted'))
         self.mode = QComboBox()
-        self.mode.addItem('日文原文 + 简体中文译文', True)
+        self.mode.addItem('原文 + 简体中文译文（日 / 英）', True)
         self.mode.addItem('仅识别原文，不翻译', False)
         self.mode.currentIndexChanged.connect(lambda: self.start_button.setText('生成双语字幕' if self.mode.currentData() else '生成原文字幕'))
         config.addWidget(self.mode)
@@ -281,15 +282,19 @@ class Studio(QMainWindow):
         self.device.addItem('自动使用 GPU', 'auto')
         self.device.addItem('CPU 兼容', 'cpu')
         self.max_chars = QSpinBox()
-        self.max_chars.setRange(16, 50)
+        self.max_chars.setRange(16, 100)
         self.max_chars.setValue(30)
-        self.max_chars.setSuffix(' 字 / 条')
+        self.max_chars.setSuffix(' 字符 / 条')
+        self.max_chars.setToolTip('包括空格与标点；英语建议 60～80 字符。仅在完整单词处断句。')
+        self.language.currentIndexChanged.connect(self.language_changed)
         row.addWidget(self.device, 1)
         row.addWidget(self.max_chars)
         config.addLayout(row)
         self.context = QLineEdit()
         self.context.setPlaceholderText('可选：人名、地名、专业词汇')
         config.addWidget(self.context)
+        self.model_button = button('选择模型…', self.choose_models)
+        config.addWidget(self.model_button)
         config.addStretch()
         self.model_status = label('', 'muted')
         self.model_status.setWordWrap(True)
@@ -364,11 +369,34 @@ class Studio(QMainWindow):
         self.status.setStyleSheet('color: #B54B43;' if error else '')
 
     def refresh_models(self):
-        state = readiness()
+        state = readiness(self.model_selection)
         count = sum(state.values())
-        self.model_status.setText('●  本地模型已就绪' if count == 4 else f'模型准备中：{count} / 4 项就绪')
+        name = Path(self.model_selection['asr_model']).name
+        self.model_status.setText(f'{name}\n' + ('●  本地模型已就绪' if count == 4 else f'模型准备中：{count} / 4 项就绪'))
         self.model_status.setToolTip('\n'.join(f'{name}：' + ('已就绪' if ready else '待下载') for name, ready in state.items()))
         self.start_button.setEnabled(self.video is not None and not self.busy() and state['语音识别'] and state['时间轴对齐'])
+
+    def language_changed(self):
+        if self.language.currentData() == 'English' and self.max_chars.value() == 30:
+            self.max_chars.setValue(68)
+        elif self.language.currentData() != 'English' and self.max_chars.value() == 68:
+            self.max_chars.setValue(30)
+
+    def choose_models(self):
+        if self.busy():
+            return
+        from .model_dialog import ModelDialog
+        dialog = ModelDialog(self.model_selection, self)
+        if dialog.exec() == QDialog.Accepted:
+            selection = dialog.selection()
+            try:
+                save_model_selection(selection)
+            except OSError as exc:
+                QMessageBox.warning(self, '无法保存模型设置', str(exc))
+                return
+            self.model_selection = selection
+            self.refresh_models()
+            self.notify('模型选择已保存，将用于下一次生成或继续翻译')
 
     def choose_video(self):
         if self.busy():
@@ -449,7 +477,7 @@ class Studio(QMainWindow):
         self.loading_table = False
         self.cue_count.setText(f'字幕校对  ·  {len(self.cues)} 条')
         self.export_button.setEnabled(bool(self.cues) and not self.busy())
-        self.retry.setEnabled(bool(self.project) and self.project_status != 'aligning' and any(c.language == 'Japanese' and not c.translation for c in self.cues) and not self.busy())
+        self.retry.setEnabled(bool(self.project) and self.project_status != 'aligning' and any(needs_translation(c) for c in self.cues) and not self.busy())
         self.active_cue = -1
 
     def edit_cue(self, item):
@@ -481,7 +509,7 @@ class Studio(QMainWindow):
             self.notify('字幕工程已保存 · 导出文件请点击「导出 SRT / VTT」')
 
     def current_options(self):
-        return {'language': self.language.currentData(), 'bilingual': self.mode.currentData(), 'track': self.track.currentData() or 0, 'device': self.device.currentData(), 'max_chars': self.max_chars.value(), 'context': self.context.text().strip()}
+        return {'language': self.language.currentData(), 'bilingual': self.mode.currentData(), 'track': self.track.currentData() or 0, 'device': self.device.currentData(), 'max_chars': self.max_chars.value(), 'context': self.context.text().strip(), **self.model_selection}
 
     def start_job(self):
         if not self.video or self.busy():
@@ -499,7 +527,7 @@ class Studio(QMainWindow):
             self.launch(job)
 
     def set_busy(self, busy):
-        for widget in (self.choose, self.language, self.mode, self.track, self.device, self.max_chars, self.context, self.table, self.export_button, self.retry):
+        for widget in (self.choose, self.language, self.mode, self.track, self.device, self.max_chars, self.context, self.model_button, self.table, self.export_button, self.retry):
             widget.setEnabled(not busy)
         self.cancel.setVisible(busy)
         self.start_button.setEnabled(not busy and self.video is not None)
@@ -624,6 +652,14 @@ class Studio(QMainWindow):
         self.project, self.cues = Path(filename), cues
         self.project_status = data.get('status', 'complete')
         self.output_dir = self.project.parent
+        options = data.get('options', {})
+        for combo, key in [(self.language, 'language'), (self.mode, 'bilingual'), (self.track, 'track'), (self.device, 'device')]:
+            index = combo.findData(options.get(key))
+            if index >= 0:
+                combo.setCurrentIndex(index)
+        self.max_chars.setValue(int(options.get('max_chars', self.max_chars.value())))
+        self.context.setText(options.get('context', ''))
+        self.model_selection.update({key: value for key, value in options.items() if key in MODEL_DEFAULTS and isinstance(value, str) and value.strip()})
         self.fill_table()
         self.notify(f'已打开字幕工程 · {len(cues)} 条字幕')
         self.refresh_models()
@@ -635,9 +671,9 @@ class Studio(QMainWindow):
             QMessageBox.information(self, '视频处理尚未完成', '此工程只包含部分字幕，请重新生成字幕后再导出完整视频字幕。')
             return
         mode = self.export_mode.currentData()
-        incomplete = mode != 'original' and any(c.language == 'Japanese' and not c.translation for c in self.cues)
+        incomplete = mode != 'original' and any(needs_translation(c) for c in self.cues)
         if incomplete:
-            QMessageBox.information(self, '译文尚未完成', '部分日语字幕没有中文译文，请点击“继续翻译”，或选择“原文字幕”导出。')
+            QMessageBox.information(self, '译文尚未完成', '部分日语或英语字幕没有中文译文，请点击“继续翻译”，或选择“原文字幕”导出。')
             return
         stem = self.video.stem if self.video else 'subtitles'
         filename, selection = QFileDialog.getSaveFileName(self, '导出字幕', str(self.output_dir / f'{stem}.{mode}.srt'), 'SubRip 字幕 (*.srt);;WebVTT 字幕 (*.vtt)')

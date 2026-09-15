@@ -10,9 +10,9 @@ import time
 import traceback
 from pathlib import Path
 
-from .config import ALIGN_PATH, ASR_PATH, CACHE, ROOT, readiness
+from .config import CACHE, ROOT, model_paths, model_issue, readiness
 from .media import extract_audio, read_span, speech_chunks
-from .subtitles import Cue, aligned_cues, atomic_write, load_project, render, save_project, validate
+from .subtitles import Cue, aligned_cues, atomic_write, load_project, render, save_project, validate, needs_translation
 
 EVENT_STREAM = sys.stdout
 
@@ -43,25 +43,29 @@ def load_options(device):
 
 
 def process(job):
+    data = None
+    if job.get('resume_project'):
+        data, cues = load_project(job['resume_project'])
+        job = {**data.get('options', {}), **job}
+    paths = model_paths(job)
+    job = {**job, **{key: str(value) for key, value in paths.items()}}
     video, out = Path(job['video']), Path(job['output'])
     out.mkdir(parents=True, exist_ok=True)
     project = out / 'subtitles.yingzi.json'
     bilingual = job.get('bilingual', True)
     device = job.get('device', 'auto')
-    cues = []
     start_clock = time.monotonic()
-    if job.get('resume_project'):
-        data, cues = load_project(job['resume_project'])
+    if data is not None:
         if data.get('status') == 'aligning':
             raise ValueError('此工程的时间轴尚未全部生成，请重新生成字幕以处理完整视频。')
         video = Path(data['video'])
     else:
+        cues = []
         if not video.is_file():
             raise ValueError('找不到所选视频。')
-        status = readiness()
-        missing = [name for name in ('语音识别', '时间轴对齐') if not status[name]]
+        missing = [f'{name}：{issue}' for name, key in [('语音识别', 'asr_model'), ('时间轴对齐', 'align_model')] if (issue := model_issue(paths[key], key))]
         if missing:
-            raise ValueError('模型未安装完成：' + '、'.join(missing) + '。请运行“安装或修复环境”。')
+            raise ValueError('所选模型不可用：' + '；'.join(missing) + '。请打开“选择模型”检查。')
         progress(1, '提取视频音轨')
         (CACHE / 'jobs').mkdir(exist_ok=True)
         with tempfile.TemporaryDirectory(prefix='job-', dir=CACHE / 'jobs') as work:
@@ -71,9 +75,9 @@ def process(job):
             spans = speech_chunks(wav, emit=progress)
             if not spans:
                 raise ValueError('所选音轨未检测到人声。请检查音轨或视频内容。')
-            progress(15, f'加载识别模型，共 {len(spans)} 个语音片段')
+            progress(15, f'加载 {paths["asr_model"].name}，共 {len(spans)} 个语音片段')
             from qwen_asr import Qwen3ASRModel, Qwen3ForcedAligner
-            model = Qwen3ASRModel.from_pretrained(str(ASR_PATH), max_inference_batch_size=1, max_new_tokens=512, **load_options(device))
+            model = Qwen3ASRModel.from_pretrained(str(paths['asr_model']), max_inference_batch_size=1, max_new_tokens=512, **load_options(device))
             records = []
             for i, (start, end) in enumerate(spans):
                 result = model.transcribe(audio=read_span(wav, start, end), language=job.get('language') or None, context=job.get('context', ''))[0]
@@ -86,12 +90,12 @@ def process(job):
             if not records:
                 raise ValueError('检测到了声音，但未识别出文字。请确认音轨与语言设置。')
             progress(54, '加载时间轴模型，逐字对齐语音')
-            aligner = Qwen3ForcedAligner.from_pretrained(str(ALIGN_PATH), **load_options(device))
+            aligner = Qwen3ForcedAligner.from_pretrained(str(paths['align_model']), **load_options(device))
             supported = {'Chinese', 'Japanese', 'English', 'Cantonese', 'French', 'German', 'Italian', 'Korean', 'Portuguese', 'Russian', 'Spanish'}
             for i, item in enumerate(records):
                 language = item['language']
                 if language not in supported:
-                    raise ValueError(f'检测到暂不支持时间轴对齐的语言：{language}。可手动指定中文或日语。')
+                    raise ValueError(f'检测到暂不支持时间轴对齐的语言：{language}。可手动指定中文、日语或英语。')
                 alignment = aligner.align(audio=read_span(wav, item['start'], item['end']), text=item['text'], language=language)[0]
                 segment_cues = aligned_cues(item['text'], alignment.items, offset=item['start'], duration=item['end'] - item['start'], max_chars=int(job.get('max_chars', 30)), language=language)
                 if cues and segment_cues and segment_cues[0].start < cues[-1].end:
@@ -105,23 +109,23 @@ def process(job):
     atomic_write(out / 'original.srt', render(cues, 'original'))
     save_project(project, video, cues, job, status='translating' if bilingual else 'complete')
     event('checkpoint', project=str(project))
-    japanese = [i for i, cue in enumerate(cues) if cue.language == 'Japanese' and not cue.translation]
-    if bilingual and japanese:
-        status = readiness()
-        if not status['日中翻译'] or not status['翻译引擎']:
-            raise ValueError('日中翻译模型或引擎未准备完成。原文字幕已保存，可稍后重试翻译。')
-        progress(75, '加载日中翻译模型')
+    pending = [i for i, cue in enumerate(cues) if needs_translation(cue)]
+    if bilingual and pending:
+        status = readiness(job)
+        if not status['字幕翻译'] or not status['翻译引擎']:
+            raise ValueError('所选翻译模型或引擎未准备完成。原文字幕已保存，请在“选择模型”中检查后继续翻译。')
+        progress(75, f'加载翻译模型 {paths["translation_model"].name}')
         from .translation import LocalTranslator
-        with LocalTranslator(progress, gpu_layers=0 if device == 'cpu' else 99) as translator:
-            for first in range(0, len(japanese), 8):
-                indexes = japanese[first:first + 8]
-                rows = [{'id': i + 1, 'text': cues[i].text} for i in indexes]
+        with LocalTranslator(progress, gpu_layers=0 if device == 'cpu' else 99, model_path=paths['translation_model']) as translator:
+            for first in range(0, len(pending), 8):
+                indexes = pending[first:first + 8]
+                rows = [{'id': i + 1, 'text': cues[i].text, 'language': cues[i].language} for i in indexes]
                 context = '\n'.join(cue.text for cue in cues[max(0, indexes[0] - 3):indexes[0]])
                 translations = translator.translate(rows, context)
                 for i in indexes:
                     cues[i].translation = translations[i + 1]
                 save_project(project, video, cues, job, status='translating')
-                progress(76 + 21 * min(first + 8, len(japanese)) / len(japanese), f'翻译字幕 {min(first + 8, len(japanese))}/{len(japanese)}')
+                progress(76 + 21 * min(first + 8, len(pending)) / len(pending), f'翻译字幕 {min(first + 8, len(pending))}/{len(pending)}')
     save_project(project, video, cues, job)
     for mode in ('original', 'translated', 'bilingual'):
         atomic_write(out / f'{mode}.srt', render(cues, mode))

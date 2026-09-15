@@ -1,6 +1,6 @@
 # 映字 · 本地双语字幕工作台
 
-Windows 桌面应用：选择视频，在本机识别中文／日语、对齐时间轴，将日语翻译为简体中文，并预览、编辑、导出字幕。
+Windows 桌面应用：选择视频，在本机识别中文／日语／英语、对齐时间轴，将日语或英语翻译为简体中文，并预览、编辑、导出字幕。支持手动选择本地识别、对齐和翻译模型。
 
 ![映字字幕工作台](docs/screenshot.png)
 
@@ -18,32 +18,46 @@ Windows 桌面应用：选择视频，在本机识别中文／日语、对齐时
 双击桌面的 **映字 - 双语字幕**，或此目录的 **启动映字.vbs**。
 
 1. 选择或拖入视频。支持常见 MP4、MKV、MOV、AVI、WebM 等格式，也可以选择音频。
-2. 选择语言。日语视频可以明确选择“日语”；中文选择“中文”。有配音的多音轨视频，请选择正确音轨。
-3. 保留“日文原文 + 简体中文译文”，点击“生成双语字幕”。中文片段直接保留中文字幕。
+2. 选择语言：自动识别，或手动指定“日语”“中文”“英语”。英语默认每条 68 字符，也可以自行调整；英文字幕保留空格与完整单词。有配音的多音轨视频，请选择正确音轨。
+3. 保留“原文 + 简体中文译文（日 / 英）”，点击“生成双语字幕”。日语生成日中双语、英语生成英中双语，中文片段直接保留中文字幕；也可选择仅识别原文。
 4. 完成后单击字幕定位画面；双击修改文字或起止时间。修改原文会清空该条已有译文，点击“继续翻译”补全。
 5. 点击“导出 SRT / VTT”选择双语、原文或中文。播放器加载同名 SRT 即可显示字幕。
 
 导出的是外挂字幕文件，原视频保持原样。应用内支持字幕叠加预览；当前版本不提供字幕烧录或视频重新编码导出。
 
+## 手动选择模型
+
+在“生成设置”中点击 **选择模型…**：
+
+- **语音识别**：选择 Qwen3-ASR-1.7B（默认）或 Qwen3-ASR-0.6B（较小），也可浏览兼容 `qwen-asr` 的本地 Qwen3-ASR 模型目录。
+- **时间轴对齐**：默认 Qwen3-ForcedAligner-0.6B；可浏览兼容的本地对齐模型目录。
+- **字幕翻译**：选择 `models/` 中的 GGUF，或浏览其他路径的聊天型 GGUF 文件。模型需要支持中日英翻译、JSON 输出，并能由当前 llama.cpp 引擎加载；任意 GGUF 并不保证兼容。当前尚未接入 Whisper、FunASR 等其他识别引擎。
+
+![本地模型选择](docs/models.png)
+
+窗口会显示路径与文件检查结果。内置模型缺失时，点击“下载缺失的内置模型”，完成后点击“保存选择”。首次安装默认下载 1.7B；0.6B 按需下载，权重约 1.9 GB。取消下载会保留可续传文件。本地外部模型无需映字专用的 `.complete` 标记。
+
+选择保存在本机 `settings.json`，重启后保留。每个字幕工程也记录模型路径及生成选项，打开时恢复；如工程来自其他电脑，重新选择有效的本地路径即可。处理过程中不能切换模型；更换模型后用于下一次生成或“继续翻译”，已完成的译文保留。
+
 ## 文件与模型
 
 每次处理创建独立 `output/视频名_日期时间_编号/` 文件夹，包含：
 
-- `bilingual.srt`：日文在上、中文在下，共用同一时间轴。
+- `bilingual.srt`：日文或英文在上、中文在下，共用同一时间轴。
 - `original.srt`、`translated.srt`：原文和中文版本。
 - `bilingual.vtt`：WebVTT 双语字幕。
 - `subtitles.yingzi.json`：可再次打开编辑的字幕工程。
 - `recognition.json`：识别原始结果；`run.log`：运行日志。
 
-编辑会自动保存字幕工程；已经导出的 SRT 不会自动更新，需要再次导出。翻译失败或取消时，已经保存的原文与字幕工程仍然保留。“继续翻译”只处理还没有译文的日语字幕。
+编辑会自动保存字幕工程；已经导出的 SRT 不会自动更新，需要再次导出。翻译失败或取消时，已经保存的原文与字幕工程仍然保留。“继续翻译”只处理还没有译文的日语或英语字幕。
 
-三个模型均保存在本目录的 `models/`，推理只加载本地文件：
+内置模型保存在本目录的 `models/`，推理只加载本地文件：
 
 | 用途 | 模型 | 来源 |
 | --- | --- | --- |
-| 中日语音识别 | Qwen3-ASR-1.7B | https://huggingface.co/Qwen/Qwen3-ASR-1.7B |
+| 中日英语音识别 | Qwen3-ASR-1.7B / 0.6B | https://github.com/QwenLM/Qwen3-ASR |
 | 时间轴 | Qwen3-ForcedAligner-0.6B | https://huggingface.co/Qwen/Qwen3-ForcedAligner-0.6B |
-| 日中翻译 | Qwen3-4B-Instruct-2507，Q4_K_M | https://huggingface.co/unsloth/Qwen3-4B-Instruct-2507-GGUF |
+| 日中 / 英中翻译 | Qwen3-4B-Instruct-2507，Q4_K_M | https://huggingface.co/unsloth/Qwen3-4B-Instruct-2507-GGUF |
 
 语音检测使用 Silero VAD；音轨提取使用 imageio-ffmpeg 自带的 FFmpeg；翻译由 llama.cpp 的 Windows CUDA 引擎运行。第三方项目遵循各自许可证。模型下载脚本会验证大文件 SHA-256，并记录仓库修订版本。
 
@@ -65,6 +79,14 @@ Windows 桌面应用：选择视频，在本机识别中文／日语、对齐时
 .\.venv\Scripts\python.exe tools\smoke_ui_flow.py
 ```
 
+单独检查英语或 0.6B 模型：
+
+```powershell
+.\.venv\Scripts\python.exe tools\download_assets.py asr-small
+.\.venv\Scripts\python.exe tools\run_validation.py --languages english --asr-model models/Qwen3-ASR-0.6B
+.\.venv\Scripts\python.exe tools\smoke_ui_flow.py output/验证_英中双语_Qwen3-ASR-0.6B/subtitles.yingzi.json
+```
+
 翻译引擎仅监听随机端口的 `127.0.0.1`，使用每次启动随机生成的 API 密钥；任务结束后关闭。原始媒体不会被上传。
 
 ## 使用范围
@@ -75,5 +97,6 @@ Windows 桌面应用：选择视频，在本机识别中文／日语、对齐时
 
 - 日语：Kotoba-Whisper v2.2 模型仓库的 `sample_audio/sample_diarization_japanese.mp3`，取前 16 秒合成测试视频。
 - 中文：Qwen3-ASR 官方演示音频 `https://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen3-ASR-Repo/asr_zh.wav`。
+- 英语：Qwen3-ASR 官方演示音频 `https://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen3-ASR-Repo/asr_en.wav`，取前 16 秒合成测试视频。
 
 这些短片仅用于功能验证，不代表识别精度或速度基准。

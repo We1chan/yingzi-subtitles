@@ -140,8 +140,8 @@ def install_runtime_archive(name, expected, folder):
 
 if __name__ == '__main__':
     sys.stdout.reconfigure(encoding='utf-8')
-    tasks = {'asr': lambda: snapshot('Qwen/Qwen3-ASR-1.7B', 'Qwen3-ASR-1.7B'), 'align': lambda: snapshot('Qwen/Qwen3-ForcedAligner-0.6B', 'Qwen3-ForcedAligner-0.6B'), 'translate': translation, 'runtime': runtime}
-    selected = sys.argv[1:] or list(tasks)
+    tasks = {'asr': lambda: snapshot('Qwen/Qwen3-ASR-1.7B', 'Qwen3-ASR-1.7B'), 'asr-small': lambda: snapshot('Qwen/Qwen3-ASR-0.6B', 'Qwen3-ASR-0.6B'), 'align': lambda: snapshot('Qwen/Qwen3-ForcedAligner-0.6B', 'Qwen3-ForcedAligner-0.6B'), 'translate': translation, 'runtime': runtime}
+    selected = sys.argv[1:] or ['asr', 'align', 'translate', 'runtime']
     with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
         futures = {pool.submit(tasks[name]): name for name in selected}
         for future in concurrent.futures.as_completed(futures):

@@ -15,6 +15,22 @@ class Cue:
     language: str = ''
 
 
+def needs_translation(cue):
+    return cue.language in {'Japanese', 'English'} and not cue.translation.strip()
+
+
+def sentence_end(text, language):
+    tail = text.rstrip('"\'”’）)]')
+    if tail.endswith(('。', '！', '？', '!', '?')):
+        return True
+    if language != 'English' or not tail.endswith('.'):
+        return False
+    word = tail.split()[-1]
+    if word.lower() in {'mr.', 'mrs.', 'ms.', 'dr.', 'prof.', 'sr.', 'jr.', 'st.', 'vs.', 'etc.', 'e.g.', 'i.e.'}:
+        return False
+    return not re.fullmatch(r'(?:[A-Za-z]\.)+', word)
+
+
 def timestamp(seconds, separator=','):
     if not math.isfinite(seconds) or seconds < 0:
         raise ValueError('时间必须是非负数。')
@@ -147,7 +163,7 @@ def aligned_cues(text, items, offset=0.0, duration=None, max_chars=30, max_secon
             if section.endswith(('、', '，', ',', ';', '；', ':', '：')) and len(section) >= 8:
                 soft_break = i
             gap = i + 1 < len(boundaries) and boundaries[i + 1][1] - end > 0.5
-            if gap or (section.endswith(('。', '！', '？', '!', '?')) and elapsed >= 0.8):
+            if gap or (sentence_end(section, language) and elapsed >= 0.8):
                 break
         char_end, _, end = boundaries[last]
         cue_start = max(0.0, boundaries[first][1])

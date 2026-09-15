@@ -72,3 +72,14 @@ def test_translation_requires_exact_unique_ids():
     for content in ('{"translations":[{"id":8,"text":"你好"}]}', '{"translations":[{"id":7,"text":""}]}', '{"translations":[{"id":7,"text":"甲"},{"id":7,"text":"乙"}]}'):
         with pytest.raises(ValueError):
             parse_translations(content, [7])
+
+
+def test_english_word_spacing_apostrophes_and_sentence_breaks():
+    words = ['Dr.', 'Smith', "can't", 'come.', 'We', 'leave', 'now.']
+    items = [token(word, i * .4, (i + 1) * .4) for i, word in enumerate(words)]
+    cues = aligned_cues(' '.join(words), items, language='English', max_chars=80, offset=10)
+    assert [cue.text for cue in cues] == ["Dr. Smith can't come.", 'We leave now.']
+    assert cues[0].start == 10
+    assert cues[1].start == 11.6
+    short = aligned_cues(' '.join(words), items, language='English', max_chars=16)
+    assert ' '.join(cue.text for cue in short) == ' '.join(words)

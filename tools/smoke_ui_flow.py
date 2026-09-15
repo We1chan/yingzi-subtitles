@@ -18,11 +18,11 @@ application.setStyle('Fusion')
 application.setStyleSheet(STYLE)
 window = Studio()
 window.show()
-source = ROOT / 'output/验证_日中双语/subtitles.yingzi.json'
+source = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / 'output/验证_日中双语/subtitles.yingzi.json'
 data, cues = load_project(source)
 cues[0].translation = ''
-project = ROOT / 'output/验证_界面翻译/subtitles.yingzi.json'
-save_project(project, data['video'], cues, status='translating')
+project = ROOT / f'output/验证_界面翻译_{cues[0].language}/subtitles.yingzi.json'
+save_project(project, data['video'], cues, data.get('options'), status='translating')
 window.load_saved_project(project)
 window.audio.setVolume(0)
 window.retry_translation()
