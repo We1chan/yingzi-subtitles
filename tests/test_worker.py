@@ -58,7 +58,9 @@ def test_missing_translator_keeps_english_checkpoint_and_original_only_works(tmp
     assert (tmp_path / 'original.srt').exists()
 
 
-def test_worker_routes_selected_asr_and_aligner_and_explicit_english(tmp_path, monkeypatch):
+@pytest.mark.parametrize('segmentation, count', [({}, 1), ({'segmentation_mode': 'smart', 'max_chars': 16}, 1),
+    ({'segmentation_mode': 'fixed', 'max_chars': 16}, 2), ({'max_chars': 16}, 2)])
+def test_worker_routes_selected_asr_and_aligner_and_explicit_english(tmp_path, monkeypatch, segmentation, count):
     video = tmp_path / 'video.mp4'
     video.touch()
     seen = {}
@@ -69,14 +71,15 @@ def test_worker_routes_selected_asr_and_aligner_and_explicit_english(tmp_path, m
             return ASR()
         def transcribe(self, **kwargs):
             seen['language'] = kwargs['language']
-            return [SimpleNamespace(text='Hello world.', language='English')]
+            return [SimpleNamespace(text='Hello wonderful world.', language='English')]
     class Aligner:
         @staticmethod
         def from_pretrained(path, **kwargs):
             seen['align'] = path
             return Aligner()
         def align(self, **kwargs):
-            return [SimpleNamespace(items=[SimpleNamespace(text='Hello', start_time=0, end_time=.5), SimpleNamespace(text='world', start_time=.5, end_time=1.5)])]
+            return [SimpleNamespace(items=[SimpleNamespace(text='Hello', start_time=0, end_time=.5),
+                SimpleNamespace(text='wonderful', start_time=.5, end_time=1), SimpleNamespace(text='world', start_time=1, end_time=1.5)])]
     monkeypatch.setitem(sys.modules, 'qwen_asr', SimpleNamespace(Qwen3ASRModel=ASR, Qwen3ForcedAligner=Aligner))
     monkeypatch.setattr(worker, 'model_issue', lambda *args: '')
     monkeypatch.setattr(worker, 'extract_audio', lambda *args: 2)
@@ -86,11 +89,13 @@ def test_worker_routes_selected_asr_and_aligner_and_explicit_english(tmp_path, m
     monkeypatch.setattr(worker, 'release', lambda: None)
     monkeypatch.setattr(worker, 'event', lambda *args, **kwargs: None)
     job = {'video': str(video), 'output': str(tmp_path), 'asr_model': str(tmp_path / 'custom-asr'), 'align_model': str(tmp_path / 'custom-align'), 'language': 'English', 'bilingual': False}
-    worker.process(job)
+    worker.process({**job, **segmentation})
     assert seen == {'asr': job['asr_model'], 'align': job['align_model'], 'language': 'English'}
     data, cues = load_project(tmp_path / 'subtitles.yingzi.json')
     assert data['options']['asr_model'] == job['asr_model']
-    assert cues[0].text == 'Hello world.'
+    assert len(cues) == count
+    assert ' '.join(cue.text for cue in cues) == 'Hello wonderful world.'
+    assert data['options']['segmentation_mode'] == ('smart' if count == 1 else 'fixed')
 
 
 @pytest.mark.parametrize('name,backend,fail', [('cohere-transcribe-03-2026', 'cohere', False),
@@ -132,7 +137,7 @@ def test_external_engine_flows_into_aligner_and_does_not_complete_after_failure(
     if fail:
         with pytest.raises(RuntimeError, match='child failed'):
             worker.process(job)
-        assert not (tmp_path / 'subtitles.yingzi.json').exists()
+        assert load_project(tmp_path / 'subtitles.yingzi.json')[0]['status'] == 'recognizing'
         assert not calls
     else:
         worker.process(job)

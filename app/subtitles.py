@@ -13,14 +13,15 @@ class Cue:
     text: str
     translation: str = ''
     language: str = ''
+    translation_error: str = ''
 
 
 def needs_translation(cue):
-    return cue.language in {'Japanese', 'English'} and not cue.translation.strip()
+    return cue.language in {'Japanese', 'English'} and (not cue.translation.strip() or bool(cue.translation_error))
 
 
 def sentence_end(text, language):
-    tail = text.rstrip('"\'”’）)]')
+    tail = text.rstrip('"\'”’）)]」』】》〉')
     if tail.endswith(('。', '！', '？', '!', '?')):
         return True
     if language != 'English' or not tail.endswith('.'):
@@ -62,7 +63,7 @@ def validate(cues):
 
 
 def clean_line(text):
-    return ' '.join(str(text).replace('\x00', '').split())
+    return '\n'.join(' '.join(line.split()) for line in str(text).replace('\x00', '').splitlines() if line.strip())
 
 
 def subtitle_text(cue, mode='bilingual'):
@@ -119,7 +120,7 @@ def normalized_chars(text):
     return ''.join(result), offsets
 
 
-def aligned_cues(text, items, offset=0.0, duration=None, max_chars=30, max_seconds=6.0, language=''):
+def aligned_cues(text, items, offset=0.0, duration=None, max_chars=30, max_seconds=6.0, language='', segmentation_mode='fixed'):
     """Preserve original spelling/punctuation; split only at aligned word boundaries."""
     if not text.strip():
         return []
@@ -143,37 +144,44 @@ def aligned_cues(text, items, offset=0.0, duration=None, max_chars=30, max_secon
         boundaries.append((end_char, float(item.start_time), float(item.end_time)))
     if not boundaries or cursor != len(normalized):
         raise ValueError('时间轴未覆盖全部识别文本，未生成不完整字幕。')
+    smart = segmentation_mode == 'smart'
+    if smart:
+        from .segmentation import smart_endpoints
+        endpoints = iter(smart_endpoints(text, boundaries, language, sentence_end, max_seconds))
     cues = []
     first, char_start = 0, 0
     while first < len(boundaries):
-        last = first
-        soft_break = None
-        for i in range(first, len(boundaries)):
-            char_end, start, end = boundaries[i]
-            section = text[char_start:char_end].strip()
-            elapsed = end - boundaries[first][1]
-            if i > first and (len(section) > max_chars or elapsed > max_seconds):
-                if soft_break is not None:
-                    last = soft_break
-                # Keep Japanese conjunctions such as けれども together.
-                elif last > first and text[char_start:boundaries[last][0]].endswith(('けれど', 'けど')):
-                    last -= 1
-                break
-            last = i
-            if section.endswith(('、', '，', ',', ';', '；', ':', '：')) and len(section) >= 8:
-                soft_break = i
-            gap = i + 1 < len(boundaries) and boundaries[i + 1][1] - end > 0.5
-            if gap or (sentence_end(section, language) and elapsed >= 0.8):
-                break
-        # Keep a final Japanese particle with a word, instead of flashing “が。” alone.
-        if language == 'Japanese' and first < last < len(boundaries) - 1:
-            tail = text[boundaries[last][0]:].strip()
-            if len(normalized_chars(tail)[0]) <= 1 and not sentence_end(text[char_start:boundaries[last][0]], language):
-                candidate = last - 1
-                new_tail = text[boundaries[candidate][0]:].strip()
-                if (len(new_tail) <= max_chars and boundaries[-1][2] - boundaries[last][1] <= max_seconds
-                        and boundaries[last][1] - boundaries[candidate][2] <= .5):
-                    last = candidate
+        if smart:
+            last = next(endpoints)
+        else:
+            last = first
+            soft_break = None
+            for i in range(first, len(boundaries)):
+                char_end, start, end = boundaries[i]
+                section = text[char_start:char_end].strip()
+                elapsed = end - boundaries[first][1]
+                if i > first and (len(section) > max_chars or elapsed > max_seconds):
+                    if soft_break is not None:
+                        last = soft_break
+                    # Keep Japanese conjunctions such as けれども together.
+                    elif last > first and text[char_start:boundaries[last][0]].endswith(('けれど', 'けど')):
+                        last -= 1
+                    break
+                last = i
+                if section.endswith(('、', '，', ',', ';', '；', ':', '：')) and len(section) >= 8:
+                    soft_break = i
+                gap = i + 1 < len(boundaries) and boundaries[i + 1][1] - end > 0.5
+                if gap or (sentence_end(section, language) and elapsed >= 0.8):
+                    break
+            # Keep a final Japanese particle with a word, instead of flashing “が。” alone.
+            if language == 'Japanese' and first < last < len(boundaries) - 1:
+                tail = text[boundaries[last][0]:].strip()
+                if len(normalized_chars(tail)[0]) <= 1 and not sentence_end(text[char_start:boundaries[last][0]], language):
+                    candidate = last - 1
+                    new_tail = text[boundaries[candidate][0]:].strip()
+                    if (len(new_tail) <= max_chars and boundaries[-1][2] - boundaries[last][1] <= max_seconds
+                            and boundaries[last][1] - boundaries[candidate][2] <= .5):
+                        last = candidate
         char_end, _, end = boundaries[last]
         cue_start = max(0.0, boundaries[first][1])
         cue_end = max(cue_start + 0.08, end)

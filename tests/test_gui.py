@@ -50,6 +50,7 @@ def test_english_project_restores_models_and_invalidates_edited_translation(app,
     window.load_saved_project(project)
     assert window.language.currentData() == 'English'
     assert window.max_chars.value() == 68
+    assert window.current_options()['segmentation_mode'] == 'fixed'
     assert window.current_options()['asr_model'] == selection['asr_model']
     window.table.item(0, 3).setText('Good morning.')
     assert window.retry.isEnabled()
@@ -64,6 +65,25 @@ def test_english_project_restores_models_and_invalidates_edited_translation(app,
     assert jobs[0]['language'] == 'English'
     _, cues = load_project(project)
     assert cues[0].text == 'Good morning.' and not cues[0].translation
+    window.close()
+
+
+def test_smart_segmentation_default_language_change_and_project_roundtrip(app, tmp_path):
+    window = Studio()
+    assert window.max_chars.currentText() == '智能分割'
+    window.language.setCurrentIndex(window.language.findData('English'))
+    options = window.current_options()
+    assert options['segmentation_mode'] == 'smart' and options['max_chars'] == 68
+    project = tmp_path / 'smart.yingzi.json'
+    cues = [Cue(1, 3, 'Hello world.', language='English')]
+    save_project(project, tmp_path / 'missing.mp4', cues, options)
+    window.max_chars.setValue(40)
+    window.load_saved_project(project)
+    assert window.max_chars.currentText() == '智能分割'
+    assert window.cues == cues
+    window.max_chars.setValue(40)
+    assert window.current_options()['segmentation_mode'] == 'fixed'
+    assert window.current_options()['max_chars'] == 40
     window.close()
 
 

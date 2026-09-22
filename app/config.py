@@ -159,6 +159,10 @@ def readiness(options=None):
         '字幕翻译': not model_issue(paths['translation_model'], 'translation_model'),
         '翻译引擎': server_path().exists(),
     }
+    if (options or {}).get('translation_backend') == 'online':
+        from .api_settings import api_issue
+        state['字幕翻译'] = not api_issue()
+        state['翻译引擎'] = True
     if asr_backend(paths['asr_model']) != 'qwen':
         state['扩展识别引擎'] = extra_runtime_ready()
     return state
