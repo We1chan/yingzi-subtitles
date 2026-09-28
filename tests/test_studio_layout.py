@@ -147,6 +147,88 @@ def test_subtitle_import_button_opens_review_and_new_project_clears_search(windo
     assert window.subtitle_search.text() == '' and not window.table.isRowHidden(0)
 
 
+def test_landing_page_gives_the_drop_zone_the_whole_column_and_explains_disabled_start(app, window):
+    window.show()
+    app.processEvents()
+    assert window.settings_tabs.tabBar().isHidden()
+    assert window.editor_card.isHidden() and window.preview_heading.isHidden()
+    assert not window.start_button.isEnabled() and '导入视频或音频' in window.start_hint.text()
+    window.step_buttons[1].click()
+    assert not window.editor_card.isHidden() and not window.preview_heading.isHidden()
+    assert window.subtitle_search.isHidden() and window.quality_filter.isHidden()
+    assert window.import_srt_button.isHidden() and window.retry.isHidden()
+    assert window.progress_bar.isHidden()
+
+
+def test_review_rows_are_compact_and_problem_statuses_stand_out(app, window, tmp_path):
+    project = tmp_path / 'subtitles.yingzi.json'
+    cues = [Cue(0, 2, 'Fine.', '好。', 'English'), Cue(3, 5, 'Pending.', language='English'),
+            Cue(6, 8, 'Failed.', language='English', translation_error='timeout'), Cue(9, 9.3, 'Short.', '短。', 'English')]
+    save_project(project, tmp_path / 'missing.mp4', cues)
+    window.resize(1440, 940)
+    window.show()
+    window.load_saved_project(project)
+    app.processEvents()
+    assert window.table.rowHeight(0) < 50
+    statuses = [window.table.item(row, 5) for row in range(4)]
+    assert [item.text() for item in statuses] == ['正常', '待翻译', '待重试', '需检查']
+    assert len({item.foreground().color().name() for item in statuses}) == 4
+    assert not statuses[0].font().bold() and all(item.font().bold() for item in statuses[1:])
+    assert not window.retry.isHidden() and window.retry.isEnabled()
+    assert window.import_srt_button.isHidden()
+
+
+def test_match_count_shows_only_while_filtering(window, tmp_path):
+    project = tmp_path / 'subtitles.yingzi.json'
+    save_project(project, tmp_path / 'missing.mp4', [Cue(0, 1, 'One', '一', 'English'), Cue(2, 3, 'Two', '二', 'English')])
+    window.load_saved_project(project)
+    assert window.match_count.isHidden()
+    window.subtitle_search.setText('One')
+    assert not window.match_count.isHidden() and window.match_count.text() == '1 / 2 条'
+    window.subtitle_search.clear()
+    assert window.match_count.isHidden()
+
+
+def test_keyboard_shortcuts_and_table_menu_mirror_toolbar(app, window, tmp_path, monkeypatch):
+    project = tmp_path / 'subtitles.yingzi.json'
+    save_project(project, tmp_path / 'missing.mp4', [Cue(i * 2, i * 2 + 1, f'Line {i}', '译文', 'English') for i in range(3)])
+    window.show()
+    window.activateWindow()
+    QTest.qWaitForWindowActive(window)
+    window.load_saved_project(project)
+    plays = []
+    monkeypatch.setattr(window, 'toggle_play', lambda: plays.append(True))
+    window.table.setFocus()
+    QTest.keyClick(window.table, Qt.Key_Space)
+    assert plays == [True]
+    QTest.keyClick(window, Qt.Key_F, Qt.ControlModifier)
+    assert window.subtitle_search.hasFocus()
+    window.subtitle_search.setText('Line')
+    QTest.keyClick(window.subtitle_search, Qt.Key_Space)
+    assert plays == [True] and window.subtitle_search.text() == 'Line '
+    window.table.selectRow(1)
+    menu = window.table_menu()
+    actions = {action.text(): action.isEnabled() for action in menu.actions() if action.text()}
+    assert actions['拆分'] and not actions['合并'] and actions['重译所选']
+    assert '从此条播放' not in actions  # The source media is missing.
+    menu.deleteLater()
+
+
+def test_network_badge_distinguishes_local_and_online_translation(window):
+    def use(backend):
+        # Avoid translation_backend_changed, which would rewrite the local settings file.
+        window.translation_backend.blockSignals(True)
+        window.translation_backend.setCurrentIndex(window.translation_backend.findData(backend))
+        window.translation_backend.blockSignals(False)
+        window.refresh_models()
+    use('local')
+    assert window.network_badge.objectName() == 'localBadge'
+    use('online')
+    assert window.network_badge.objectName() == 'onlineBadge' and '在线 API' in window.network_badge.text()
+    window.mode.setCurrentIndex(window.mode.findData(False))
+    assert window.network_badge.objectName() == 'localBadge'
+
+
 def test_generation_options_hide_unused_translation_controls(window):
     window.mode.setCurrentIndex(window.mode.findData(False))
     assert window.translation_group.isHidden()

@@ -15,6 +15,9 @@ QLabel { background: transparent; }
 #section { font-size: 15px; font-weight: 600; }
 #panelTitle { font-size: 19px; font-weight: 700; }
 #badge { color: #9F3918; background: #FFF0E9; padding: 5px 10px; border-radius: 6px; font-size: 11px; }
+#localBadge { color: #3E6A48; background: #EEF5EF; padding: 5px 10px; border-radius: 6px; font-size: 11px; }
+#onlineBadge { color: #8A4B0F; background: #FFF1DC; padding: 5px 10px; border-radius: 6px; font-size: 11px; }
+#startHint { color: #8A6A58; font-size: 12px; }
 #card, #inspector { background: white; border: 1px solid #E6E2DD; border-radius: 10px; }
 #panelBody { background: white; }
 #panelFooter { background: #FFFAF7; border-top: 1px solid #F0E7DF; border-bottom-left-radius: 10px; border-bottom-right-radius: 10px; }
@@ -42,7 +45,7 @@ QPushButton:disabled, QToolButton:disabled { color: #B3ABA5; background: #F6F3F0
 #quiet:disabled { color: #BEB5AE; background: transparent; border-color: transparent; }
 #dropLink { background: transparent; color: #D4C8BF; border: none; }
 #dropLink:hover { color: #FFAB8D; }
-#step { color: #8C8178; background: transparent; border: 1px solid transparent; padding: 10px 18px; text-align: left; }
+#step { color: #8C8178; background: transparent; border: 1px solid transparent; padding: 8px 18px; text-align: left; }
 #step:checked { color: #A33713; background: #FFE8DC; border-color: #FFD5BF; font-weight: 600; }
 #step:hover { background: #FFEEE4; }
 #danger { color: #B34840; background: #FFF7F5; border-color: #EACCC7; }
@@ -55,7 +58,7 @@ QComboBox::drop-down { subcontrol-origin: padding; subcontrol-position: top righ
 QComboBox QAbstractItemView { background: white; selection-background-color: #FFE4D7; selection-color: #662A17; border: 1px solid #E8DAD1; }
 QProgressBar { background: #F3EAE3; border: none; border-radius: 2px; height: 4px; max-height: 4px; }
 QProgressBar::chunk { background: #FF5522; border-radius: 2px; }
-QTableWidget { background: white; alternate-background-color: #FDFBF9; border: none; gridline-color: #F0ECE8; selection-background-color: #FFE7DC; selection-color: #592B1B; }
+QTableWidget { background: white; alternate-background-color: #FDFBF9; border: none; outline: 0; gridline-color: #F0ECE8; selection-background-color: #FFE7DC; selection-color: #592B1B; }
 QTableWidget::item { padding: 7px; border-bottom: 1px solid #F0ECE8; }
 QHeaderView::section { background: #F6F4F1; border: none; border-bottom: 1px solid #E9E3DD; color: #82776E; font-size: 11px; padding: 6px 5px; }
 QScrollArea { border: none; background: white; }
@@ -81,4 +84,15 @@ QMenu::item { padding: 8px 24px; border-radius: 4px; }
 QMenu::item:selected { background: #FFE8DC; color: #9F3918; }
 QToolTip { color: #473B33; background: #FFF8F2; border: 1px solid #E6D8CC; padding: 5px; }
 '''
-STYLE += '\nQComboBox::down-arrow { width: 12px; height: 8px; image: url("' + (Path(__file__).parent / 'assets/chevron-down.svg').as_posix() + '"); }\n'
+ASSETS = (Path(__file__).parent / 'assets').as_posix()
+STYLE += '\nQComboBox::down-arrow { width: 12px; height: 8px; image: url("' + ASSETS + '/chevron-down.svg"); }\n'
+# The global box styling removes Fusion's native spin buttons, so draw them explicitly.
+STYLE += '''
+QSpinBox, QDoubleSpinBox { padding-right: 28px; }
+QSpinBox::up-button, QDoubleSpinBox::up-button, QSpinBox::down-button, QDoubleSpinBox::down-button { subcontrol-origin: border; width: 24px; border: none; border-left: 1px solid #ECE6E0; background: transparent; }
+QSpinBox::up-button, QDoubleSpinBox::up-button { subcontrol-position: top right; border-top-right-radius: 6px; }
+QSpinBox::down-button, QDoubleSpinBox::down-button { subcontrol-position: bottom right; border-bottom-right-radius: 6px; }
+QSpinBox::up-button:hover, QDoubleSpinBox::up-button:hover, QSpinBox::down-button:hover, QDoubleSpinBox::down-button:hover { background: #FFF0E8; }
+QSpinBox::up-arrow, QDoubleSpinBox::up-arrow { width: 10px; height: 7px; image: url("''' + ASSETS + '''/chevron-up.svg"); }
+QSpinBox::down-arrow, QDoubleSpinBox::down-arrow { width: 10px; height: 7px; image: url("''' + ASSETS + '''/chevron-down.svg"); }
+'''

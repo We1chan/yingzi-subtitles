@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QFrame, QLabe
     QVBoxLayout, QLineEdit, QFileDialog, QMessageBox, QTableWidgetItem,
     QGraphicsView, QGraphicsScene, QGraphicsTextItem, QAbstractItemView,
     QPlainTextEdit, QDialog, QGraphicsPixmapItem, QGraphicsItem,
-    QFormLayout, QDialogButtonBox, QCheckBox)
+    QFormLayout, QDialogButtonBox, QCheckBox, QMenu)
 
 from .config import ROOT, CACHE, OUTPUT, LOGS, readiness, load_model_selection, save_model_selection, MODEL_DEFAULTS, asr_language_issue, asr_backend
 from .media import audio_tracks, CREATE_NO_WINDOW
@@ -256,6 +256,16 @@ class Studio(QMainWindow):
         QShortcut(QKeySequence('Ctrl+O'), self, activated=self.choose_video)
         QShortcut(QKeySequence.Undo, self, activated=self.undo_edit)
         QShortcut(QKeySequence.Redo, self, activated=self.redo_edit)
+        QShortcut(QKeySequence.Find, self, activated=self.focus_search)
+        # Space plays only from the list or picture; text fields and cell editors keep it.
+        for widget in (self.table, self.preview):
+            QShortcut(QKeySequence(Qt.Key_Space), widget, activated=lambda: self.toggle_play(),
+                      context=Qt.WidgetWithChildrenShortcut)
+        # Wrapped rows are refit after column widths settle, not on every resize step.
+        self.row_fit_timer = QTimer(self)
+        self.row_fit_timer.setSingleShot(True)
+        self.row_fit_timer.timeout.connect(self.table.resizeRowsToContents)
+        self.table.horizontalHeader().sectionResized.connect(lambda *args: self.row_fit_timer.start(80))
 
     def build_ui(self):
         build_studio(self, VideoView)
@@ -311,6 +321,11 @@ class Studio(QMainWindow):
         has_cues = bool(self.cues)
         styling = self.settings_tabs.currentIndex() == 1
         self.preview_stack.setCurrentIndex(1 if media or styling else 0)
+        # Before anything is loaded, the drop zone gets the whole column.
+        landing = not media and not has_cues and self.settings_tabs.currentIndex() == 0
+        self.editor_card.setVisible(not landing)
+        self.preview_heading.setVisible(not landing)
+        self.progress_bar.setVisible(busy or self.progress_bar.value() > 0)
         if not available:
             self.preview.empty.show()
             title = '原媒体不可用' if media else '字幕样式预览'
@@ -323,10 +338,11 @@ class Studio(QMainWindow):
         for control in self.editor_buttons:
             control.setVisible(has_cues)
         self.selection_label.setVisible(has_cues)
-        self.editor_hint.setVisible(has_cues)
-        self.subtitle_search.setEnabled(has_cues)
-        self.quality_filter.setEnabled(has_cues)
+        for control in (self.subtitle_search, self.quality_filter):
+            control.setEnabled(has_cues)
+            control.setVisible(has_cues)
         self.import_srt_button.setEnabled(available and not busy)
+        self.import_srt_button.setVisible(available)
         self.welcome_import.setEnabled(not busy)
         self.open_project_button.setEnabled(not busy)
         bilingual = bool(self.mode.currentData())
@@ -379,7 +395,8 @@ class Studio(QMainWindow):
         self.retranslate_button.setEnabled(ready and bool(rows) and bool(self.project))
         self.undo_button.setEnabled(ready and bool(self.history.undo_stack))
         self.redo_button.setEnabled(ready and bool(self.history.redo_stack))
-        self.selection_label.setText(f'已选 {len(rows)} 条' if rows else '选择字幕以编辑')
+        self.selection_label.setText(f'已选 {len(rows)} 条 · 右键查看可用操作' if rows
+                                     else '单击定位 · 双击编辑 · 空格播放 · 修改自动保存')
 
     def busy(self):
         return self.worker is not None and self.worker.state() != QProcess.NotRunning
@@ -420,11 +437,31 @@ class Studio(QMainWindow):
         self.translation_note.setText('本地识别 · 在线翻译' if online else '本地识别 · 本地翻译')
         uses_api = online and (self.mode.currentData() or self.active_online_translation)
         self.network_badge.setText('●  字幕文本将发送至在线 API' if uses_api else '●  完全本地处理')
+        badge = 'onlineBadge' if uses_api else 'localBadge'
+        if self.network_badge.objectName() != badge:
+            self.network_badge.setObjectName(badge)
+            self.network_badge.style().unpolish(self.network_badge)
+            self.network_badge.style().polish(self.network_badge)
         self.api_button.setEnabled(not self.busy())
         self.model_status.setToolTip('\n'.join(f'{name}：' + ('已就绪' if ready else '待下载') for name, ready in state.items()))
         if online:
             self.model_status.setToolTip(settings['base_url'] + f'\n在线翻译：每组最多 {settings["batch_size"]} 条字幕，可在 API 设置中调整。\n' + self.model_status.toolTip())
-        self.start_button.setEnabled(self.video is not None and not self.busy() and not getattr(self, '_ui_busy', False) and state['语音识别'] and state['时间轴对齐'] and state.get('扩展识别引擎', True) and not issue)
+        busy = self.busy() or getattr(self, '_ui_busy', False)
+        media = self.video is not None and self.video.is_file()
+        models = state['语音识别'] and state['时间轴对齐'] and state.get('扩展识别引擎', True)
+        self.start_button.setEnabled(media and not busy and models and not issue)
+        # A disabled primary action states the one thing still missing.
+        if busy or self.start_button.isEnabled():
+            reason = ''
+        elif self.video is None:
+            reason = '导入视频或音频后即可开始生成'
+        elif not media:
+            reason = '原媒体已移动或删除，恢复后才能重新生成'
+        elif issue:
+            reason = '请更改「媒体语言」，或在「管理模型」中切换识别模型'
+        else:
+            reason = '识别或时间轴模型未就绪 · 点击「管理模型」下载或选择'
+        self.start_hint.setText(reason)
         self.context.setPlaceholderText('可选：人名、地名、专业词汇' if asr_backend(self.model_selection['asr_model']) == 'qwen' else '当前识别模型不支持术语提示')
         self.context.setEnabled(not self.busy() and asr_backend(self.model_selection['asr_model']) == 'qwen')
         self.refresh_workspace()
@@ -738,6 +775,8 @@ class Studio(QMainWindow):
         self.launch({**self.current_options(), 'video': str(self.video), 'output': str(self.project.parent),
                      'resume_project': str(self.project), 'resegment_only': True})
 
+    STATUS_COLORS = {'待重试': '#B54B43', '待翻译': '#A86412', '需检查': '#C24B20', '正常': '#ADA59E'}
+
     def update_status_cell(self, row):
         cue = self.cues[row]
         issues = quality_issues(cue, self.cues[row - 1] if row else None)
@@ -745,8 +784,12 @@ class Studio(QMainWindow):
         item = QTableWidgetItem(text)
         item.setFlags(item.flags() & ~Qt.ItemIsEditable)
         item.setToolTip('\n'.join(issues) or '未发现规则检查问题；译文含义仍需人工校对。')
-        if issues:
-            item.setForeground(QColor('#C24B20'))
+        # Muted "正常" lets rows that need attention stand out while scanning.
+        item.setForeground(QColor(self.STATUS_COLORS[text]))
+        if text != '正常':
+            font = item.font()
+            font.setBold(True)
+            item.setFont(font)
         self.table.setItem(row, 5, item)
 
     def filter_rows(self):
@@ -760,7 +803,37 @@ class Studio(QMainWindow):
             self.table.setRowHidden(row, hidden)
             visible += not hidden
         self.match_count.setText(f'{visible} / {len(self.cues)} 条' if self.cues else '')
+        self.match_count.setVisible(bool(self.cues) and (bool(query) or mode != 0))
         self.update_editor_actions()
+
+    def focus_search(self):
+        if self.cues and self.subtitle_search.isVisible():
+            self.subtitle_search.setFocus()
+            self.subtitle_search.selectAll()
+
+    def table_menu(self):
+        menu = QMenu(self)
+        rows = self.selected_rows()
+        if len(rows) == 1 and self.video and self.video.is_file():
+            menu.addAction('从此条播放', lambda: self.play_from(rows[0]))
+            menu.addSeparator()
+        for control in (self.split_button, self.merge_button, self.retranslate_button):
+            menu.addAction(control.text(), control.click).setEnabled(control.isEnabled())
+        menu.addSeparator()
+        for control in (self.undo_button, self.redo_button):
+            menu.addAction(control.text(), control.click).setEnabled(control.isEnabled())
+        return menu
+
+    def show_table_menu(self, point):
+        if self.cues and self.table.indexAt(point).isValid():
+            menu = self.table_menu()
+            menu.exec(self.table.viewport().mapToGlobal(point))
+            menu.deleteLater()
+
+    def play_from(self, row):
+        self.seek_cue(row, 0)
+        if self.player.playbackState() != QMediaPlayer.PlayingState:
+            self.toggle_play()
 
     def fill_table(self):
         self.cue_starts = [cue.start for cue in self.cues]
@@ -777,9 +850,9 @@ class Studio(QMainWindow):
                 if column < 3:
                     item.setForeground(QColor('#8C7B71'))
                 self.table.setItem(row, column, item)
-            line_count = max(len(cue.text.splitlines()), len(cue.translation.splitlines()), 1)
-            self.table.setRowHeight(row, max(58, min(180, 20 * line_count + 18)))
             self.update_status_cell(row)
+        # Fit wrapped text instead of a fixed tall row, so more subtitles fit on screen.
+        self.table.resizeRowsToContents()
         self.loading_table = False
         self.filter_rows()
         self.cue_count.setText(f'字幕  ·  {len(self.cues)} 条' if self.cues else '字幕列表')
@@ -787,7 +860,9 @@ class Studio(QMainWindow):
         self.export_video_button.setEnabled(bool(self.cues) and bool(self.video) and self.video.is_file() and not self.busy())
         incomplete = self.project_status in ('recognizing', 'aligning')
         self.retry.setText('继续处理' if incomplete else '继续翻译')
-        self.retry.setEnabled(bool(self.project) and (cache_ready(self.project) if incomplete else any(needs_translation(c) for c in self.cues)) and not self.busy())
+        resumable = bool(self.project) and (cache_ready(self.project) if incomplete else any(needs_translation(c) for c in self.cues))
+        self.retry.setEnabled(resumable and not self.busy())
+        self.retry.setVisible(resumable)
         self.active_cue = -1
         self.undo_button.setEnabled(bool(self.history.undo_stack) and not self.busy())
         self.redo_button.setEnabled(bool(self.history.redo_stack) and not self.busy())
@@ -923,6 +998,7 @@ class Studio(QMainWindow):
                             self.cues[row].translation = update['translation']
                             self.cues[row].translation_error = update['error']
                             self.table.item(row, 4).setText(update['translation'])
+                            self.table.resizeRowToContents(row)
                             self.update_status_cell(row)
                             if row + 1 < len(self.cues):
                                 self.update_status_cell(row + 1)
