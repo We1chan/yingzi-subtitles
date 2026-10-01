@@ -15,6 +15,7 @@ class Cue:
     translation: str = ''
     language: str = ''
     translation_error: str = ''
+    reviewed: bool = False
 
 
 def needs_translation(cue):
@@ -117,7 +118,7 @@ def resolve_project_path(value, relative, project):
 def save_project(path, video, cues, options=None, status='complete', *, workspace=None, editor=None):
     path = require_project_path(path)
     validate(cues)
-    data = {'version': 1, 'video': str(video) if video else '', 'options': options or {}, 'status': status, 'cues': [dataclasses.asdict(cue) for cue in cues]}
+    data = {'version': 1, 'video': str(video) if video else '', 'options': options or {}, 'status': status, 'cues': [vars(cue).copy() for cue in cues]}
     data['video_relative'] = relative_path(video, Path(path).parent) if video else None
     if workspace is not None:
         data['workspace'] = str(Path(workspace).resolve())
@@ -151,6 +152,8 @@ def _load_project_data(path):
         if any(not isinstance(getattr(cue, key), str) for cue in cues
                for key in ('text', 'translation', 'language', 'translation_error')):
             raise ValueError('工程中的字幕文字或语言记录无效。')
+        if any(type(cue.reviewed) is not bool for cue in cues):
+            raise ValueError('工程中的校对标记无效。')
         validate(cues)
         if data['video']:
             data['video'] = str(resolve_project_path(data['video'], data.get('video_relative'), path))

@@ -109,11 +109,13 @@ def process(job):
                 for cue_id, text in (translations or {}).items():
                     cues[cue_id - 1].translation = text
                     cues[cue_id - 1].translation_error = ''
+                    cues[cue_id - 1].reviewed = False
                     updates.append({'id': cue_id, 'translation': text, 'error': ''})
                     completed += 1
                 if failure:
                     cue_id, error = failure
                     cues[cue_id - 1].translation_error = error
+                    cues[cue_id - 1].reviewed = False
                     updates.append({'id': cue_id, 'translation': cues[cue_id - 1].translation, 'error': error})
                     failed += 1
                 save_project(project, video, cues, job, status='translating', workspace=out, editor=editor)

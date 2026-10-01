@@ -3,9 +3,9 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (QWidget, QFrame, QLabel, QPushButton, QVBoxLayout,
     QHBoxLayout, QLineEdit, QTabWidget, QScrollArea, QSplitter,
     QTableWidget, QHeaderView, QAbstractItemView, QProgressBar, QStackedWidget,
-    QButtonGroup, QSizePolicy, QMenu)
+    QButtonGroup, QSizePolicy, QMenu, QCheckBox)
 
-from .api_settings import load_translation_backend
+from .api_settings import load_translation_backend, read_settings
 from .style_panel import StylePanel
 from .waveform import Waveform
 from .widgets import ComboBox, Slider, IntegerChoice
@@ -106,6 +106,7 @@ def build_studio(studio, video_view):
     menu.addSeparator()
     s.save_as_action = menu.addAction('另存工程副本…  Ctrl+Shift+S', s.save_project_as)
     s.relink_action = menu.addAction('重新关联原媒体…', s.relink_media)
+    s.history_action = menu.addAction('工程历史版本…', s.show_project_versions)
     more.setMenu(menu)
     header_box.addWidget(more)
     root_box.addWidget(header)
@@ -192,9 +193,16 @@ def build_studio(studio, video_view):
     s.time_label = text('00:00 / 00:00')
     s.sound_button = action('声音…', s.configure_preview_audio, 'quiet')
     s.sound_button.setFixedWidth(72)
+    s.playback_speed = ComboBox()
+    for speed in (.5, .75, 1., 1.25, 1.5, 2.):
+        s.playback_speed.addItem(f'{speed:g}×', speed)
+    s.playback_speed.setCurrentIndex(2)
+    s.playback_speed.setFixedWidth(78)
+    s.playback_speed.setToolTip('预览播放速度，不改变字幕时间轴或导出视频')
     playback.addWidget(s.play)
     playback.addWidget(s.seek, 1)
     playback.addWidget(s.time_label)
+    playback.addWidget(s.playback_speed)
     playback.addWidget(s.sound_button)
     preview_box.addWidget(s.playback_controls)
     s.splitter.addWidget(preview_card)
@@ -219,7 +227,7 @@ def build_studio(studio, video_view):
     editor_heading.addSpacing(12)
     editor_heading.addWidget(s.subtitle_search, 1)
     s.quality_filter = ComboBox()
-    s.quality_filter.addItems(['全部字幕', '待翻译 / 待重试', '质量提示'])
+    s.quality_filter.addItems(['全部字幕', '待翻译 / 待重试', '质量提示', '未校对', '已校对'])
     s.quality_filter.setFixedWidth(155)
     editor_heading.addWidget(s.quality_filter)
     s.match_count = text('')
@@ -254,6 +262,24 @@ def build_studio(studio, video_view):
     edit_row.addWidget(s.retry)
     edit_row.addWidget(s.import_srt_button)
     editor_box.addWidget(s.edit_toolbar)
+    s.proof_toolbar = QWidget()
+    proof = QHBoxLayout(s.proof_toolbar)
+    proof.setContentsMargins(0, 0, 0, 0)
+    proof.setSpacing(6)
+    s.previous_cue = action('上一条', lambda: s.navigate_cue(-1), 'quiet')
+    s.next_cue = action('下一条', lambda: s.navigate_cue(1), 'quiet')
+    s.review_button = action('标记已校对', s.mark_reviewed, 'quiet')
+    s.review_next_button = action('确认并下一条', s.review_and_next, 'quiet')
+    s.previous_cue.setToolTip('上一条可见字幕 · Alt+↑')
+    s.next_cue.setToolTip('下一条可见字幕 · Alt+↓')
+    s.review_next_button.setToolTip('标记已校对并定位下一条 · Ctrl+Enter')
+    s.loop_current = QCheckBox('循环当前')
+    s.loop_current.setToolTip('循环播放当前字幕；Alt+← / → 快退或快进 2 秒')
+    s.auto_advance = QCheckBox('编辑后下一条')
+    for control in (s.previous_cue, s.next_cue, s.review_button, s.review_next_button, s.loop_current, s.auto_advance):
+        proof.addWidget(control)
+    proof.addStretch()
+    editor_box.addWidget(s.proof_toolbar)
     s.editor_stack = QStackedWidget()
     empty_editor = QWidget()
     empty_box = QVBoxLayout(empty_editor)
@@ -266,11 +292,11 @@ def build_studio(studio, video_view):
     empty_box.addWidget(empty_hint)
     empty_box.addStretch()
     s.editor_stack.addWidget(empty_editor)
-    s.table = QTableWidget(0, 6)
+    s.table = QTableWidget(0, 7)
     s.table.setMinimumHeight(118)
     s.table.setContextMenuPolicy(Qt.CustomContextMenu)
     s.table.verticalHeader().setMinimumSectionSize(34)
-    s.table.setHorizontalHeaderLabels(['#', '开始', '结束', '原文', '中文译文', '检查'])
+    s.table.setHorizontalHeaderLabels(['#', '开始', '结束', '原文', '中文译文', '检查', '校对'])
     s.table.verticalHeader().hide()
     s.table.setAlternatingRowColors(True)
     s.table.setSelectionBehavior(QAbstractItemView.SelectRows)
@@ -280,7 +306,7 @@ def build_studio(studio, video_view):
     s.table.setShowGrid(False)
     s.table.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
     table_header = s.table.horizontalHeader()
-    for column, width in [(0, 34), (1, 104), (2, 104), (5, 66)]:
+    for column, width in [(0, 34), (1, 104), (2, 104), (5, 60), (6, 64)]:
         table_header.setSectionResizeMode(column, QHeaderView.Fixed)
         s.table.setColumnWidth(column, width)
     table_header.setSectionResizeMode(3, QHeaderView.Stretch)
@@ -328,6 +354,8 @@ def build_studio(studio, video_view):
     s.mode = ComboBox()
     s.mode.addItem('原文 + 简体中文翻译', True)
     s.mode.addItem('仅原文字幕', False)
+    if read_settings().get('installation_profile') == 'original':
+        s.mode.setCurrentIndex(1)
     config.addWidget(s.mode)
     s.translation_group = QWidget()
     translation = QVBoxLayout(s.translation_group)
@@ -362,6 +390,8 @@ def build_studio(studio, video_view):
     s.device = ComboBox()
     s.device.addItem('自动使用 GPU', 'auto')
     s.device.addItem('CPU 兼容', 'cpu')
+    if read_settings().get('installation_device') == 'cpu':
+        s.device.setCurrentIndex(1)
     s.max_chars = IntegerChoice(16, 100, ' 字符 / 条')
     s.max_chars.insertItem(0, '智能分割', None)
     s.max_chars.setCurrentIndex(0)
@@ -477,5 +507,8 @@ def build_studio(studio, video_view):
     s.table.cellClicked.connect(s.seek_cue)
     s.table.customContextMenuRequested.connect(s.show_table_menu)
     s.table.itemSelectionChanged.connect(s.update_editor_actions)
+    s.loop_current.toggled.connect(s.toggle_cue_loop)
+    s.playback_speed.currentIndexChanged.connect(lambda: s.player.setPlaybackRate(s.playback_speed.currentData()))
+    s.auto_advance.toggled.connect(s.schedule_project_save)
     s.waveform.rangeChanged.connect(s.change_waveform_range)
     s.waveform.seekRequested.connect(lambda seconds: s.player.setPosition(round(seconds * 1000)))

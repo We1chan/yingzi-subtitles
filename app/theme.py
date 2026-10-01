@@ -83,6 +83,10 @@ QTabBar::tab:selected { color: #AD3914; border-bottom: 2px solid #FF5522; font-w
 QTabBar::tab:hover { background: #FFF5EF; }
 QCheckBox { spacing: 7px; }
 QPlainTextEdit { background: #272626; color: #E8DED6; border: none; font-family: Consolas; font-size: 12px; selection-background-color: #FFDFD2; selection-color: #662A17; }
+QPlainTextEdit#versionDetails { background: white; color: #473B33; border: 1px solid #E5DCD4; border-radius: 6px; padding: 8px; font-family: "Microsoft YaHei"; font-size: 13px; }
+QListWidget#versionList { background: white; border: 1px solid #E5DCD4; border-radius: 6px; outline: 0; }
+QListWidget#versionList::item { padding: 6px; border-bottom: 1px solid #F0ECE8; }
+QListWidget#versionList::item:selected { background: #FFE7DC; color: #592B1B; }
 QMenu { background: white; border: 1px solid #E5DCD4; padding: 5px; }
 QMenu::item { padding: 8px 24px; border-radius: 4px; }
 QMenu::item:selected { background: #FFE8DC; color: #9F3918; }

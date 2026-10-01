@@ -74,6 +74,16 @@ class Waveform(QWidget):
         self.message = '选择一条字幕查看波形；拖动橙色边线调整起止时间。'
         self.update()
 
+    def update_range(self, start, end, lower=0, upper=None):
+        if not self.interval or start < self.left or end > self.right:
+            return False
+        self.interval = [start, end]
+        self.original = tuple(self.interval)
+        self.lower = max(self.left, lower)
+        self.upper = min(self.right, upper if upper is not None else self.right)
+        self.update()
+        return True
+
     def time_to_x(self, seconds):
         return 12 + (seconds - self.left) / max(.001, self.right - self.left) * (self.width() - 24)
 

@@ -1,5 +1,6 @@
 """Undoable subtitle operations and lightweight, advisory quality checks."""
 import copy
+from dataclasses import dataclass
 
 from .subtitles import Cue, needs_translation, validate
 
@@ -26,26 +27,65 @@ def quality_issues(cue, previous=None):
     return issues
 
 
+@dataclass
+class CueChange:
+    index: int
+    before: list
+    after: list
+
+
 class EditHistory:
     def __init__(self):
         self.undo_stack, self.redo_stack = [], []
+        self.pending = None
+        self.last_change = None
 
-    def remember(self, cues):
-        self.undo_stack.append(copy.deepcopy(cues))
+    def record_change(self, index, before, after):
+        if before == after:
+            return
+        self.undo_stack.append(CueChange(index, copy.deepcopy(before), copy.deepcopy(after)))
         self.undo_stack = self.undo_stack[-100:]
         self.redo_stack.clear()
 
+    def record(self, before, after):
+        start, end_before, end_after = 0, len(before), len(after)
+        while start < min(end_before, end_after) and before[start] == after[start]:
+            start += 1
+        while end_before > start and end_after > start and before[end_before - 1] == after[end_after - 1]:
+            end_before -= 1
+            end_after -= 1
+        self.record_change(start, before[start:end_before], after[start:end_after])
+
+    def remember(self, cues):
+        # A background job can change many cues. Compress its baseline into a splice when it ends.
+        self.pending = [copy.copy(cue) for cue in cues]
+
+    def finish(self, cues):
+        if self.pending is not None:
+            self.record(self.pending, cues)
+            self.pending = None
+
+    def apply(self, cues, change, reverse=False):
+        old, new = (change.after, change.before) if reverse else (change.before, change.after)
+        result = list(cues)
+        result[change.index:change.index + len(old)] = copy.deepcopy(new)
+        self.last_change = (change.index, len(old), len(new))
+        return result
+
     def undo(self, cues):
+        self.finish(cues)
         if not self.undo_stack:
             return None
-        self.redo_stack.append(copy.deepcopy(cues))
-        return self.undo_stack.pop()
+        change = self.undo_stack.pop()
+        self.redo_stack.append(change)
+        return self.apply(cues, change, reverse=True)
 
     def redo(self, cues):
         if not self.redo_stack:
             return None
-        self.undo_stack.append(copy.deepcopy(cues))
-        return self.redo_stack.pop()
+        change = self.redo_stack.pop()
+        self.undo_stack.append(change)
+        return self.apply(cues, change)
 
 
 def merge_cues(cues, indexes):
@@ -58,7 +98,7 @@ def merge_cues(cues, indexes):
     sep = ' ' if chosen[0].language == 'English' else ''
     merged = Cue(chosen[0].start, chosen[-1].end, sep.join(c.text for c in chosen), language=chosen[0].language)
     # The old translations remain available through undo; new boundaries need a fresh translation.
-    result = copy.deepcopy(cues[:indexes[0]]) + [merged] + copy.deepcopy(cues[indexes[-1] + 1:])
+    result = cues[:indexes[0]] + [merged] + cues[indexes[-1] + 1:]
     validate(result)
     return result
 
@@ -68,7 +108,7 @@ def split_cue(cues, index, position, seconds):
     first, second = cue.text[:position].strip(), cue.text[position:].strip()
     if not first or not second or not cue.start < seconds < cue.end:
         raise ValueError('拆分后两条字幕都必须有文字和有效时间。')
-    result = copy.deepcopy(cues)
+    result = list(cues)
     result[index:index + 1] = [Cue(cue.start, seconds, first, language=cue.language),
                              Cue(seconds, cue.end, second, language=cue.language)]
     validate(result)

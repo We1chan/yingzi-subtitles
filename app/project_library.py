@@ -179,11 +179,21 @@ class ProjectLibrary:
         target = path.with_name(f'{name}.yingziproj')
         if target != path and target.exists():
             raise ValueError('此名称的工程已存在。')
+        from .project_versions import version_folder
+        history, new_history = version_folder(path), version_folder(target)
+        if target != path and history.exists() and new_history.exists():
+            raise ValueError('此名称的历史版本目录已存在，请使用其他名称。')
         if target != path:
             path.rename(target)
+        moved_history = False
         try:
+            if target != path and history.exists():
+                history.rename(new_history)
+                moved_history = True
             self.update_metadata(target, name=name)
         except Exception:
+            if moved_history:
+                new_history.rename(history)
             if target != path:
                 target.rename(path)
             raise
@@ -208,7 +218,7 @@ class ProjectLibrary:
 
     def trash(self, path):
         folder = self.folder(path)
-        if len(list(folder.rglob('*.yingziproj'))) != 1:
+        if len([file for file in folder.rglob('*.yingziproj') if '.history' not in file.relative_to(folder).parts]) != 1:
             raise ValueError('此文件夹包含多个工程，请先将工程分别导入工程库。')
         for entry in self.scan():
             if entry.path != Path(path).resolve() and not entry.error and (project_workspace(entry.path).resolve().is_relative_to(folder)
@@ -267,7 +277,9 @@ class ProjectLibrary:
                         data[section][key] = relocate(data[section][key])
             for key in ('video', 'workspace'):
                 if isinstance(data.get(key), str) and data[key]:
-                    data[key + '_relative'] = relative_path(data[key], path.parent)
+                    # A snapshot will be restored into the original project folder, not its history subfolder.
+                    base = path.parent.parent.parent if path.parent.parent.name == '.history' else path.parent
+                    data[key + '_relative'] = relative_path(data[key], base)
             after = json.dumps(data, ensure_ascii=False, indent=2)
             if after != before:
                 atomic_write(path, after)
@@ -331,6 +343,8 @@ class ProjectLibrary:
                     if folder != new:
                         self.rebase_folder(folder, old, new)
                 for path in folder.rglob('*.yingziproj'):
+                    if '.history' in path.relative_to(folder).parts:
+                        continue
                     data, _ = load_project(path)
                     video = Path(data['video']) if data['video'] else None
                     self.update_metadata(path, name=(video.stem if path.stem == 'subtitles' and video else path.stem))
@@ -348,4 +362,4 @@ class ProjectLibrary:
                         temporary.replace(path)
                         os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns))
             raise
-        return [path for _, folder in moved for path in folder.rglob('*.yingziproj')]
+        return [path for _, folder in moved for path in folder.rglob('*.yingziproj') if '.history' not in path.relative_to(folder).parts]

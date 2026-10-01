@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QFrame, QLabe
     QVBoxLayout, QLineEdit, QFileDialog, QMessageBox, QTableWidgetItem,
     QGraphicsView, QGraphicsScene, QGraphicsTextItem, QAbstractItemView,
     QPlainTextEdit, QDialog, QGraphicsPixmapItem, QGraphicsItem,
-    QFormLayout, QDialogButtonBox, QCheckBox, QMenu, QStackedWidget, QInputDialog)
+    QFormLayout, QDialogButtonBox, QCheckBox, QMenu, QStackedWidget, QInputDialog, QAbstractItemDelegate)
 
 from .config import ROOT, CACHE, PROJECTS, LOGS, readiness, load_model_selection, save_model_selection, MODEL_DEFAULTS, asr_language_issue, asr_backend
 from .project_library import ProjectLibrary
@@ -227,6 +227,7 @@ class Studio(QMainWindow):
         self.export_settings = {}
         self.loading_table = False
         self.active_cue = -1
+        self.loop_row = None
         self.model_selection = load_model_selection()
         self.setWindowTitle('映字 · 双语字幕工作台')
         self.setWindowIcon(make_icon())
@@ -266,6 +267,12 @@ class Studio(QMainWindow):
         QShortcut(QKeySequence.Undo, self, activated=self.undo_edit)
         QShortcut(QKeySequence.Redo, self, activated=self.redo_edit)
         QShortcut(QKeySequence.Find, self, activated=self.focus_search)
+        QShortcut(QKeySequence('Alt+Up'), self, activated=lambda: self.navigate_cue(-1))
+        QShortcut(QKeySequence('Alt+Down'), self, activated=lambda: self.navigate_cue(1))
+        QShortcut(QKeySequence('Alt+Left'), self, activated=lambda: self.skip_preview(-2))
+        QShortcut(QKeySequence('Alt+Right'), self, activated=lambda: self.skip_preview(2))
+        QShortcut(QKeySequence('Ctrl+Return'), self, activated=self.review_and_next)
+        QShortcut(QKeySequence('Ctrl+Enter'), self, activated=self.review_and_next)
         # Space plays only from the list or picture; text fields and cell editors keep it.
         for widget in (self.table, self.preview):
             QShortcut(QKeySequence(Qt.Key_Space), widget, activated=lambda: self.toggle_play(),
@@ -284,6 +291,7 @@ class Studio(QMainWindow):
         self.table.itemSelectionChanged.connect(self.schedule_project_save)
         self.preview_toggle.toggled.connect(self.schedule_project_save)
         self.player.playbackStateChanged.connect(self.schedule_project_save)
+        self.player.playbackRateChanged.connect(self.schedule_project_save)
 
     def build_ui(self):
         build_studio(self, VideoView)
@@ -497,6 +505,8 @@ class Studio(QMainWindow):
         self.save_project_button.setEnabled(bool(self.session.video or self.session.project) and not busy)
         self.save_as_action.setEnabled(bool(self.session.video or self.session.project) and not busy)
         self.relink_action.setEnabled(bool(self.session.video) and not busy)
+        self.history_action.setEnabled(bool(self.session.project) and not busy)
+        self.proof_toolbar.setVisible(has_cues)
         self.setWindowTitle('映字 · 工程库' if self.screen_stack.currentIndex() == 0 else f'{self.session.project.name} · 映字' if self.session.project else '映字 · 双语字幕工作台')
         if self.session.project:
             self.file_name.setText(self.library.metadata(self.session.project).get('name') or self.session.project.stem)
@@ -552,6 +562,11 @@ class Studio(QMainWindow):
         self.retranslate_button.setEnabled(ready and bool(rows) and bool(self.session.project))
         self.undo_button.setEnabled(ready and bool(self.history.undo_stack))
         self.redo_button.setEnabled(ready and bool(self.history.redo_stack))
+        for control in (self.previous_cue, self.next_cue, self.review_button, self.review_next_button):
+            control.setEnabled(ready and bool(rows))
+        self.review_button.setText('取消已校对' if rows and all(self.cues[row].reviewed for row in rows) else '标记已校对')
+        self.loop_current.setEnabled(ready and bool(rows) and bool(self.session.video and self.session.video.is_file()))
+        self.auto_advance.setEnabled(ready and bool(self.cues))
         self.selection_label.setText(f'已选 {len(rows)} 条 · 右键查看可用操作' if rows
                                      else '单击定位 · 双击编辑 · 空格播放 · 修改自动保存')
 
@@ -603,11 +618,13 @@ class Studio(QMainWindow):
     def refresh_models(self):
         online = self.translation_backend.currentData() == 'online'
         state = readiness({**self.model_selection, 'translation_backend': self.translation_backend.currentData()})
+        if not self.mode.currentData():
+            state = {name: ready for name, ready in state.items() if name not in ('字幕翻译', '翻译引擎')}
         count = sum(state.values())
         name = Path(self.model_selection['asr_model']).name
         issue = asr_language_issue(self.model_selection['asr_model'], self.language.currentData())
         self.model_status.setText(f'{name}\n' + (issue or ('●  本地模型已就绪' if count == len(state) else f'模型准备中：{count} / {len(state)} 项就绪')))
-        if online:
+        if online and self.mode.currentData():
             settings = load_api_settings()
             self.model_status.setText((issue or name) + '\n在线翻译：' + (api_issue() or settings['model']))
         self.translation_note.setText('本地识别 · 在线翻译' if online else '本地识别 · 本地翻译')
@@ -620,7 +637,7 @@ class Studio(QMainWindow):
             self.network_badge.style().polish(self.network_badge)
         self.api_button.setEnabled(not self.busy())
         self.model_status.setToolTip('\n'.join(f'{name}：' + ('已就绪' if ready else '待下载') for name, ready in state.items()))
-        if online:
+        if online and self.mode.currentData():
             self.model_status.setToolTip(settings['base_url'] + f'\n在线翻译：每组最多 {settings["batch_size"]} 条字幕，可在 API 设置中调整。\n' + self.model_status.toolTip())
         busy = self.busy() or getattr(self, '_ui_busy', False)
         media = self.session.video is not None and self.session.video.is_file()
@@ -757,7 +774,7 @@ class Studio(QMainWindow):
         project = self.library.create(f'{self.session.video.stem[:80]} · 导入字幕', self.session.video, cues, options, status='edited',
                      editor={**self.editor_state(), 'step': 1, 'selected_rows': [], 'search': '', 'quality_filter': 0})
         folder = project_workspace(project)
-        self.history.remember(self.cues)
+        self.history.record(self.cues, cues)
         self.cues, self.session.project, self.session.output_dir = cues, project, folder
         self.session.status = 'edited'
         self.subtitle_search.clear()
@@ -816,6 +833,12 @@ class Studio(QMainWindow):
         self.sound_button.setToolTip(f'声音输出：{self.preview_audio.description()}\n预览音量：{volume}%' + (' · 已静音' if silent else ''))
 
     def position_changed(self, milliseconds):
+        if (self.loop_current.isChecked() and self.loop_row is not None and 0 <= self.loop_row < len(self.cues)
+                and self.player.playbackState() == QMediaPlayer.PlayingState):
+            cue = self.cues[self.loop_row]
+            if milliseconds >= round(cue.end * 1000) or milliseconds < round(cue.start * 1000):
+                self.player.setPosition(round(cue.start * 1000))
+                return
         if not self.seek.isSliderDown():
             self.seek.setValue(milliseconds)
         def mmss(ms):
@@ -840,7 +863,8 @@ class Studio(QMainWindow):
             self.active_cue = index
 
     def seek_cue(self, row, column):
-        if row < len(self.cues):
+        if 0 <= row < len(self.cues):
+            self.loop_row = row
             self.player.setPosition(round(self.cues[row].start * 1000))
             self.waveform_row = row
             self.waveform.show()
@@ -851,8 +875,8 @@ class Studio(QMainWindow):
         index = getattr(self, 'waveform_row', -1)
         if not 0 <= index < len(self.cues):
             return
-        result = copy.deepcopy(self.cues)
-        result[index].start, result[index].end = start, end
+        result = list(self.cues)
+        result[index] = dataclasses.replace(self.cues[index], start=start, end=end, reviewed=False)
         try:
             self.apply_cue_edit(result)
             self.table.selectRow(index)
@@ -874,28 +898,49 @@ class Studio(QMainWindow):
         if self.busy() or self.session.status in ('recognizing', 'aligning'):
             return
         validate(result)
-        self.history.remember(self.cues)
+        previous = self.cues
         self.cues = result
-        self.save_edits()
-        self.fill_table()
+        try:
+            self.save_edits()
+        except (OSError, ValueError) as exc:
+            self.cues = previous
+            self.notify(f'无法保存此次编辑：{exc}', error=True)
+            return False
+        self.history.record(previous, result)
+        self.refresh_changed_cues(previous)
         self.refresh_caption()
+        return True
 
     def undo_edit(self):
         if not self.busy():
             result = self.history.undo(self.cues)
             if result is not None:
+                previous = self.cues
                 self.cues = result
-                self.save_edits()
-                self.fill_table()
+                try:
+                    self.save_edits()
+                except (OSError, ValueError) as exc:
+                    self.cues = previous
+                    self.history.undo_stack.append(self.history.redo_stack.pop())
+                    self.notify(f'无法保存此次撤销：{exc}', error=True)
+                    return
+                self.refresh_changed_cues(previous)
                 self.refresh_caption()
 
     def redo_edit(self):
         if not self.busy():
             result = self.history.redo(self.cues)
             if result is not None:
+                previous = self.cues
                 self.cues = result
-                self.save_edits()
-                self.fill_table()
+                try:
+                    self.save_edits()
+                except (OSError, ValueError) as exc:
+                    self.cues = previous
+                    self.history.redo_stack.append(self.history.undo_stack.pop())
+                    self.notify(f'无法保存此次重做：{exc}', error=True)
+                    return
+                self.refresh_changed_cues(previous)
                 self.refresh_caption()
 
     def merge_selected(self):
@@ -954,6 +999,7 @@ class Studio(QMainWindow):
             self.notify('请选择需要重新翻译的字幕。')
             return
         self.save_edits()
+        self.session.snapshot('重译所选前')
         self.launch({**self.current_options(), 'video': str(self.session.video), 'output': str(self.session.output_dir),
                      'resume_project': str(self.session.project), 'bilingual': True, 'selected_ids': [i + 1 for i in rows]})
 
@@ -962,6 +1008,7 @@ class Studio(QMainWindow):
             self.notify('此工程尚无完整对齐缓存，需要先生成字幕。')
             return
         self.save_edits()
+        self.session.snapshot('重新分段前')
         self.launch({**self.current_options(), 'video': str(self.session.video), 'output': str(self.session.output_dir),
                      'resume_project': str(self.session.project), 'resegment_only': True})
 
@@ -981,6 +1028,10 @@ class Studio(QMainWindow):
             font.setBold(True)
             item.setFont(font)
         self.table.setItem(row, 5, item)
+        review = QTableWidgetItem('已校对' if cue.reviewed else '未校对')
+        review.setFlags(review.flags() & ~Qt.ItemIsEditable)
+        review.setForeground(QColor('#39745C' if cue.reviewed else '#ADA59E'))
+        self.table.setItem(row, 6, review)
 
     def filter_rows(self):
         mode = self.quality_filter.currentIndex()
@@ -989,6 +1040,7 @@ class Studio(QMainWindow):
         for row, cue in enumerate(self.cues):
             issues = quality_issues(cue, self.cues[row - 1] if row else None)
             hidden = ((mode == 1 and not needs_translation(cue)) or (mode == 2 and not issues)
+                      or (mode == 3 and cue.reviewed) or (mode == 4 and not cue.reviewed)
                       or bool(query and query not in (cue.text + '\n' + cue.translation).casefold()))
             self.table.setRowHidden(row, hidden)
             visible += not hidden
@@ -1013,6 +1065,8 @@ class Studio(QMainWindow):
             menu.addSeparator()
         for control in (self.split_button, self.merge_button, self.retranslate_button):
             menu.addAction(control.text(), control.click).setEnabled(control.isEnabled())
+        menu.addAction(self.review_button.text(), self.mark_reviewed).setEnabled(self.review_button.isEnabled())
+        menu.addAction('确认并下一条', self.review_and_next).setEnabled(self.review_next_button.isEnabled())
         menu.addSeparator()
         for control in (self.undo_button, self.redo_button):
             menu.addAction(control.text(), control.click).setEnabled(control.isEnabled())
@@ -1029,11 +1083,87 @@ class Studio(QMainWindow):
         if self.player.playbackState() != QMediaPlayer.PlayingState:
             self.toggle_play()
 
+    def commit_cell_edit(self):
+        editor = QApplication.focusWidget()
+        self._cell_commit_ok = True
+        if self.table.state() == QAbstractItemView.EditingState and editor and self.table.isAncestorOf(editor):
+            self._committing_navigation = True
+            try:
+                self.table.itemDelegate().commitData.emit(editor)
+                self.table.itemDelegate().closeEditor.emit(editor, QAbstractItemDelegate.NoHint)
+            finally:
+                self._committing_navigation = False
+        return self._cell_commit_ok
+
+    def navigate_cue(self, direction, anchor=None):
+        if self.busy() or not self.cues:
+            return
+        rows = self.selected_rows()
+        if anchor is None:
+            anchor = rows[0] if rows else (-1 if direction > 0 else len(self.cues))
+        if not self.commit_cell_edit():
+            return
+        for row in range(anchor + direction, len(self.cues) if direction > 0 else -1, direction):
+            if not self.table.isRowHidden(row):
+                self.table.clearSelection()
+                self.table.selectRow(row)
+                self.table.scrollToItem(self.table.item(row, 3))
+                self.seek_cue(row, 0)
+                return row
+        self.notify('已到最后一条可见字幕。' if direction > 0 else '已到第一条可见字幕。')
+
+    def skip_preview(self, seconds):
+        if self.session.video and not self.busy():
+            position = max(0, self.player.position() + round(seconds * 1000))
+            if self.player.duration() > 0:
+                position = min(position, self.player.duration())
+            self.player.setPosition(position)
+
+    def toggle_cue_loop(self, enabled):
+        if not enabled:
+            self.loop_row = None
+            return
+        rows = self.selected_rows()
+        if rows and not self.busy() and self.session.video and self.session.video.is_file():
+            self.seek_cue(rows[0], 0)
+            self.preview_audio.refresh()
+            self.player.play()
+        else:
+            self.loop_current.setChecked(False)
+
+    def mark_reviewed(self):
+        rows = self.selected_rows()
+        if rows:
+            self.set_reviewed(rows, not all(self.cues[row].reviewed for row in rows))
+
+    def set_reviewed(self, rows, value):
+        if self.busy() or self.session.status in ('recognizing', 'aligning'):
+            return
+        result = list(self.cues)
+        for row in rows:
+            result[row] = dataclasses.replace(result[row], reviewed=value)
+        return self.apply_cue_edit(result)
+
+    def review_and_next(self):
+        if self.busy():
+            return
+        rows = self.selected_rows()
+        if len(rows) != 1:
+            return
+        row = rows[0]
+        if not self.commit_cell_edit():
+            return
+        if self.set_reviewed([row], True):
+            self.navigate_cue(1, anchor=row)
+
     def fill_table(self):
         self.cue_starts = [cue.start for cue in self.cues]
         self.waveform.clear()
         self.waveform.hide()
         self.waveform_row = -1
+        self.loop_row = None
+        self.loop_current.setChecked(False)
+        self.active_cue = -1
         self.loading_table = True
         self.table.setRowCount(len(self.cues))
         for row, cue in enumerate(self.cues):
@@ -1049,6 +1179,9 @@ class Studio(QMainWindow):
         self.table.resizeRowsToContents()
         self.loading_table = False
         self.filter_rows()
+        self.refresh_table_actions()
+
+    def refresh_table_actions(self):
         self.cue_count.setText(f'字幕  ·  {len(self.cues)} 条' if self.cues else '字幕列表')
         self.export_button.setEnabled(bool(self.cues) and not self.busy())
         self.export_video_button.setEnabled(bool(self.cues) and bool(self.session.video) and self.session.video.is_file() and not self.busy())
@@ -1057,7 +1190,6 @@ class Studio(QMainWindow):
         resumable = bool(self.session.project) and (cache_ready(self.session.project) if incomplete else any(needs_translation(c) for c in self.cues))
         self.retry.setEnabled(resumable and not self.busy())
         self.retry.setVisible(resumable)
-        self.active_cue = -1
         self.undo_button.setEnabled(bool(self.history.undo_stack) and not self.busy())
         self.redo_button.setEnabled(bool(self.history.redo_stack) and not self.busy())
         for control in (self.retranslate_button, self.merge_button, self.split_button):
@@ -1068,30 +1200,68 @@ class Studio(QMainWindow):
     def edit_cue(self, item):
         if self.loading_table or item.row() >= len(self.cues):
             return
-        cue = self.cues[item.row()]
+        row = item.row()
+        cue = self.cues[row]
         column = item.column()
         attribute = {1: 'start', 2: 'end', 3: 'text', 4: 'translation'}.get(column)
         if not attribute:
             return
         old = getattr(cue, attribute)
-        before = copy.deepcopy(self.cues)
+        changed = False
         try:
             value = parse_time(item.text()) if column in (1, 2) else item.text().strip()
-            setattr(cue, attribute, value)
-            validate(self.cues)
+            if value == old:
+                return
+            updated = dataclasses.replace(cue, **{attribute: value}, reviewed=False)
             if column == 3 and value != old:
                 # Existing translations must not silently appear current after source edits.
-                cue.translation = ''
+                updated.translation = ''
             if column in (3, 4):
-                cue.translation_error = ''
+                updated.translation_error = ''
+            # Only this cue and its neighbours can acquire invalid timing or overlap.
+            validate(self.cues[max(0, row - 1):row] + [updated] + self.cues[row + 1:row + 2])
+            self.cues[row] = updated
             self.save_edits()
-            if value != old:
-                self.history.remember(before)
+            self.history.record_change(row, [cue], [updated])
+            changed = True
         except Exception as exc:
-            self.cues = before
+            self.cues[row] = cue
+            self._cell_commit_ok = False
             self.notify(str(exc), error=True)
-        self.fill_table()
+        self.refresh_cue_rows([row])
         self.position_changed(self.player.position())
+        if changed and self.auto_advance.isChecked() and not getattr(self, '_committing_navigation', False):
+            QTimer.singleShot(0, lambda: self.navigate_cue(1, anchor=row))
+
+    def refresh_changed_cues(self, previous):
+        if len(previous) != len(self.cues):
+            self.fill_table()
+        else:
+            self.refresh_cue_rows([row for row, (old, new) in enumerate(zip(previous, self.cues)) if old != new])
+
+    def refresh_cue_rows(self, rows):
+        affected = {row for row in rows if 0 <= row < len(self.cues)}
+        affected.update(row + 1 for row in list(affected) if row + 1 < len(self.cues))
+        self.loading_table = True
+        try:
+            for row in sorted(affected):
+                cue = self.cues[row]
+                self.cue_starts[row] = cue.start
+                for column, value in enumerate([timestamp(cue.start), timestamp(cue.end), cue.text, cue.translation], 1):
+                    self.table.item(row, column).setText(value)
+                self.update_status_cell(row)
+                self.table.resizeRowToContents(row)
+        finally:
+            self.loading_table = False
+        waveform_row = getattr(self, 'waveform_row', -1)
+        if 0 <= waveform_row < len(self.cues) and self.waveform.interval:
+            cue = self.cues[waveform_row]
+            lower = self.cues[waveform_row - 1].end if waveform_row else 0
+            upper = self.cues[waveform_row + 1].start if waveform_row + 1 < len(self.cues) else None
+            if not self.waveform.update_range(cue.start, cue.end, lower, upper):
+                self.waveform.load(self.session.video, cue, self.track.currentData() or 0, lower, upper)
+        self.filter_rows()
+        self.refresh_table_actions()
 
     def save_edits(self):
         if self.session.can_save():
@@ -1101,7 +1271,8 @@ class Studio(QMainWindow):
         return {'position_ms': self._restore_position if self._restore_position is not None else self.player.position(),
                 'selected_rows': self.selected_rows(), 'step': self.settings_tabs.currentIndex(),
                 'preview_collapsed': self.preview_toggle.isChecked(), 'search': self.subtitle_search.text(),
-                'quality_filter': self.quality_filter.currentIndex(), 'last_export_target': self.last_export_target}
+                'quality_filter': self.quality_filter.currentIndex(), 'last_export_target': self.last_export_target,
+                'playback_rate': self.playback_speed.currentData(), 'auto_advance': self.auto_advance.isChecked()}
 
     def create_project(self):
         self.session.create(self.current_options())
@@ -1133,6 +1304,28 @@ class Studio(QMainWindow):
             self.notify(f'工程已另存：{target} · 后续编辑自动保存到此文件')
         except (OSError, ValueError) as exc:
             QMessageBox.warning(self, '无法另存工程', str(exc))
+
+    def show_project_versions(self):
+        if self.busy() or not self.session.project:
+            return
+        from .version_dialog import VersionDialog
+        from .project_versions import restore_version
+        try:
+            self.flush_style_edits()
+            self.save_edits()
+            dialog = VersionDialog(self.session.project, self)
+            if dialog.exec() != QDialog.Accepted or dialog.selected_version() is None:
+                return
+            if QMessageBox.question(self, '恢复历史版本', '恢复所选版本？当前内容会先保留为新的历史版本。',
+                                    QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
+                return
+            self.style_save_timer.stop()
+            project = self.session.project
+            restore_version(project, dialog.selected_version())
+            self.load_saved_project(project)
+            self.notify('已恢复历史版本；恢复前的内容仍可从「工程历史版本」找回。')
+        except (OSError, ValueError, TypeError) as exc:
+            self.notify(f'无法恢复历史版本：{exc}', error=True)
 
     def relink_media(self):
         if self.busy() or not self.session.video:
@@ -1170,6 +1363,7 @@ class Studio(QMainWindow):
         if not self.session.project:
             self.create_project()
         self.save_edits()
+        self.session.snapshot('重新生成前')
         job = {**self.current_options(), 'video': str(self.session.video), 'output': str(self.session.fresh_workspace())}
         self.cues = []
         self.session.status = 'recognizing'
@@ -1193,6 +1387,7 @@ class Studio(QMainWindow):
         for control in self.editor_buttons + [self.translation_preferences_button]:
             control.setEnabled(not busy)
         self.waveform.setEnabled(not busy)
+        self.playback_speed.setEnabled(not busy)
         self.preview.caption.setFlag(QGraphicsItem.ItemIsMovable, not busy)
         self.cancel.setVisible(busy)
         self.cancel.setText('取消导出' if self.jobs.kind == 'export' else '取消处理')
@@ -1231,6 +1426,7 @@ class Studio(QMainWindow):
                     if 0 <= row < len(self.cues):
                         self.cues[row].translation = update['translation']
                         self.cues[row].translation_error = update['error']
+                        self.cues[row].reviewed = False
                         self.table.item(row, 4).setText(update['translation'])
                         self.table.resizeRowToContents(row)
                         self.update_status_cell(row)
@@ -1265,6 +1461,7 @@ class Studio(QMainWindow):
 
     def job_failed_to_start(self):
         self.active_online_translation = False
+        self.history.finish(self.cues)
         self.notify('处理程序无法启动，请运行 setup.cmd 修复环境。', error=True)
         self.set_busy(False)
         self.fill_table()
@@ -1282,6 +1479,7 @@ class Studio(QMainWindow):
             if self.jobs.kind != 'export':
                 self.recover_checkpoint()
         self.active_online_translation = False
+        self.history.finish(self.cues)
         self.set_busy(False)
         self.fill_table()
 
@@ -1307,7 +1505,7 @@ class Studio(QMainWindow):
         characters = int(options.get('max_chars') or (68 if options.get('language') == 'English' else 30))
         position = max(0, int(editor.get('position_ms', 0)))
         step = max(0, min(2, int(editor.get('step', 1 if cues else 0))))
-        quality_filter = max(0, min(2, int(editor.get('quality_filter', 0))))
+        quality_filter = max(0, min(4, int(editor.get('quality_filter', 0))))
         rows = editor.get('selected_rows', [])
         if not isinstance(rows, list) or any(not isinstance(row, int) for row in rows):
             raise ValueError('工程中的字幕选择记录无效。')
@@ -1336,6 +1534,10 @@ class Studio(QMainWindow):
             self.track.clear()
             self.track.addItem('原媒体缺失' if path else '默认音轨', options.get('track', 0))
         self.session.opened(filename, data)
+        self.loop_current.setChecked(False)
+        speed = self.playback_speed.findData(editor.get('playback_rate', 1.))
+        self.playback_speed.setCurrentIndex(speed if speed >= 0 else 2)
+        self.auto_advance.setChecked(bool(editor.get('auto_advance', False)))
         self.cues = cues
         self.export_settings = options.get('video_export', {}).copy() if isinstance(options.get('video_export'), dict) else {}
         if not isinstance(self.export_settings, dict):

@@ -1,9 +1,11 @@
 """The open project: its file, media and processing workspace, and when the editor may write it."""
 import uuid
+import time
 from pathlib import Path
 
 from .config import OUTPUT
 from .subtitles import load_project, project_workspace, save_project
+from .project_versions import AUTO_INTERVAL, create_version
 
 # Unfinished processing keeps its status so "继续处理" can resume from the cache.
 RESUMABLE = ('recognizing', 'aligning', 'draft')
@@ -20,6 +22,7 @@ class ProjectSession:
         self.closed = False
         # While a worker runs it owns the project file and writes its own checkpoints.
         self.worker_owns = lambda: False
+        self.snapshot_times = {}
 
     def can_save(self):
         return bool(self.project) and not self.loading and not self.closed and not self.worker_owns()
@@ -27,9 +30,17 @@ class ProjectSession:
     def save(self, cues, options, editor):
         if not self.can_save():
             return False
+        now = time.monotonic()
+        if now - self.snapshot_times.get(str(self.project), -AUTO_INTERVAL) >= AUTO_INTERVAL:
+            self.snapshot()
+            self.snapshot_times[str(self.project)] = now
         status = self.status if self.status in RESUMABLE else 'edited'
         save_project(self.project, self.video, cues, options, status=status, workspace=self.output_dir, editor=editor)
         return True
+
+    def snapshot(self, reason='自动保存前'):
+        if self.can_save():
+            return create_version(self.project, reason, force=reason != '自动保存前')
 
     def is_open(self, path):
         return self.project is not None and self.project.resolve() == Path(path).resolve()
