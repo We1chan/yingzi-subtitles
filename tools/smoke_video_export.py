@@ -43,7 +43,7 @@ def screenshot_and_export():
         application.processEvents()
         window.grab().save(str(ROOT / 'logs/subtitle-style-compact.png'))
         window.start_video_export(out / '字幕合成示例.mp4', {'preset': 'fast', 'crf': 18})
-        window.worker.finished.connect(finished)
+        window.jobs.process.finished.connect(finished)
     except Exception as exc:
         print(f'FAIL: {exc}', flush=True)
         application.exit(1)
@@ -51,7 +51,7 @@ def screenshot_and_export():
 
 def finished(*args):
     try:
-        assert window.export_work is None
+        assert window.jobs.export_work is None
         assert window.progress_bar.value() == 100, window.status.text()
         assert (out / '字幕合成示例.mp4').stat().st_size > 1000
         print('PASS: video decoding, styled preview, GUI export, progress and cleanup', flush=True)

@@ -95,7 +95,7 @@ def test_translation_retries_punctuation_only_rows_and_keeps_context():
     import io
     import json
     from app.translation import LocalTranslator
-    translator = LocalTranslator()
+    translator = LocalTranslator(slots=1)
     translator.port = 1234
     payloads = []
     def respond(request, timeout):
@@ -112,3 +112,77 @@ def test_translation_retries_punctuation_only_rows_and_keeps_context():
     assert payloads[-1]['previous_context'] == 'context\nマレーシア'
     assert '買わなくてはならない' in payloads[0]['following_context']
     assert len(payloads) == 4
+
+
+def answer_rows(payloads, barrier=None):
+    import io
+    import json
+    def respond(request, timeout):
+        content = json.loads(json.loads(request.data)['messages'][1]['content'])
+        row = content['subtitles'][0]
+        payloads[row['id']] = content
+        if barrier:
+            barrier.wait()  # Times out unless the slots really run together.
+        answer = [{'id': row['id'], 'text': f'第{row["id"]}句。'}]
+        return io.BytesIO(json.dumps({'choices': [{'finish_reason': 'stop', 'message': {'content': json.dumps({'translations': answer})}}]}).encode())
+    return respond
+
+
+def test_local_slots_run_batch_together_with_the_sequential_prompts():
+    import threading
+    from app.translation import LocalTranslator
+    rows = [{'id': i, 'text': f'Line {i}', 'language': 'English'} for i in range(1, 7)]
+    results, prompts = [], []
+    for slots, barrier in ((1, None), (3, threading.Barrier(3, timeout=5))):
+        translator = LocalTranslator(slots=slots)
+        translator.port = 1234
+        translator.references = [{'original': 'Earlier', 'translation': '之前。'}]
+        payloads = {}
+        translator.client.open = answer_rows(payloads, barrier)
+        results.append(translator.translate(rows, 'context', 'after'))
+        prompts.append(payloads)
+    assert results[0] == results[1] == {i: f'第{i}句。' for i in range(1, 7)}
+    assert prompts[0] == prompts[1]
+    assert prompts[1][4]['previous_context'] == 'context\nLine 1\nLine 2\nLine 3'
+    assert prompts[1][4]['following_context'] == 'Line 5\nLine 6\nafter'
+
+
+def test_local_slot_failure_still_names_the_cue():
+    import io
+    import json
+    from app.translation import LocalTranslator
+    translator = LocalTranslator(slots=2)
+    translator.port = 1234
+    def respond(request, timeout):
+        row = json.loads(json.loads(request.data)['messages'][1]['content'])['subtitles'][0]
+        text = '。' if row['id'] == 2 else '好。'
+        answer = {'translations': [{'id': row['id'], 'text': text}]}
+        return io.BytesIO(json.dumps({'choices': [{'finish_reason': 'stop', 'message': {'content': json.dumps(answer)}}]}).encode())
+    translator.client.open = respond
+    with pytest.raises(RuntimeError, match='字幕 2 翻译失败'):
+        translator.translate([{'id': i, 'text': f'Line {i}'} for i in range(1, 5)])
+
+
+def test_local_server_uses_gpu_slots_and_falls_back_to_one(tmp_path, monkeypatch):
+    import contextlib
+    from app import translation
+    commands = []
+    class Process:
+        def __init__(self, command, **kwargs):
+            commands.append(command)
+            self.code = 1 if len(commands) == 1 else None  # The multi-slot server cannot allocate.
+        def poll(self):
+            return self.code
+        def terminate(self):
+            self.code = 0
+        def wait(self, timeout=None):
+            return self.code
+    monkeypatch.setattr(translation, 'LOGS', tmp_path)
+    monkeypatch.setattr(translation.subprocess, 'Popen', Process)
+    assert translation.LocalTranslator(gpu_layers=0).slots == 1
+    translator = translation.LocalTranslator(gpu_layers=99)
+    translator.client.open = lambda request, timeout: contextlib.nullcontext(SimpleNamespace(status=200))
+    with translator:
+        assert translator.slots == 1
+    option = lambda command, name: command[command.index(name) + 1]
+    assert [(option(c, '--parallel'), option(c, '-c')) for c in commands] == [('4', '16384'), ('1', '4096')]

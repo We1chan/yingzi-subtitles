@@ -60,7 +60,7 @@ def test_unusable_drop_keeps_current_project(application, tmp_path, monkeypatch,
     video = tmp_path / 'video.mp4'
     video.touch()
     window = Studio()
-    window.video = tmp_path / 'current.mp4'
+    window.session.video = tmp_path / 'current.mp4'
     original_cues = [Cue(1, 2, 'Keep this subtitle.', language='English')]
     window.cues = original_cues
     window.show()
@@ -78,7 +78,7 @@ def test_unusable_drop_keeps_current_project(application, tmp_path, monkeypatch,
         events = send_drag(application, window.preview.viewport(), mime)
         assert not any(event.isAccepted() for event in events)
         assert calls == [] and window.cues is original_cues
-        assert window.video == tmp_path / 'current.mp4'
+        assert window.session.video == tmp_path / 'current.mp4'
     window.close()
 
 
@@ -93,7 +93,7 @@ def test_project_drop_and_invalid_project_report(application, tmp_path):
     mime = QMimeData()
     mime.setUrls([QUrl.fromLocalFile(str(project))])
     assert all(event.isAccepted() for event in send_drag(application, window.preview.viewport(), mime))
-    imported = window.project
+    imported = window.session.project
     assert window.library.contains(imported) and project.exists() and window.cues == cues
     broken = tmp_path / 'broken.yingziproj'
     broken.write_text('{', encoding='utf-8')
@@ -101,7 +101,7 @@ def test_project_drop_and_invalid_project_report(application, tmp_path):
     events = send_drag(application, window.preview.viewport(), mime)
     assert not events[-1].isAccepted()
     assert '无法打开拖入的文件' in window.status.text()
-    assert window.project == imported and window.cues == cues
+    assert window.session.project == imported and window.cues == cues
     window.close()
 
 
@@ -116,7 +116,7 @@ def test_dropped_video_loads_player_and_audio_track(application, tmp_path):
     mime = QMimeData()
     mime.setUrls([QUrl.fromLocalFile(str(video))])
     assert all(event.isAccepted() for event in send_drag(application, window.preview.viewport(), mime))
-    assert window.video == video.resolve()
+    assert window.session.video == video.resolve()
     assert Path(window.player.source().toLocalFile()) == video.resolve()
     assert window.track.count() == 1 and 'aac' in window.track.itemText(0)
     assert not window.preview.empty.isVisible()
@@ -131,7 +131,7 @@ def test_unsupported_file_drop_never_replaces_video(application, tmp_path, monke
     path = tmp_path / ('unsupported' + suffix)
     path.write_text('data', encoding='utf-8')
     window = Studio()
-    window.video = tmp_path / 'current.mp4'
+    window.session.video = tmp_path / 'current.mp4'
     window.show()
     application.processEvents()
     calls = []
@@ -139,12 +139,12 @@ def test_unsupported_file_drop_never_replaces_video(application, tmp_path, monke
     mime = QMimeData()
     mime.setUrls([QUrl.fromLocalFile(str(path))])
     assert not any(e.isAccepted() for e in send_drag(application, window.preview.viewport(), mime))
-    assert not calls and window.video.name == 'current.mp4'
+    assert not calls and window.session.video.name == 'current.mp4'
     window.close()
 
 
 def test_srt_requires_loaded_video_and_invalid_import_preserves_project(application, tmp_path, monkeypatch):
-    monkeypatch.setattr('app.gui.OUTPUT', tmp_path / 'output')
+    monkeypatch.setattr('app.project_session.OUTPUT', tmp_path / 'output')
     srt = tmp_path / 'captions.srt'
     srt.write_text('1\n00:00:01,000 --> 00:00:02,000\nHello', encoding='utf-8')
     window = Studio()
@@ -153,33 +153,33 @@ def test_srt_requires_loaded_video_and_invalid_import_preserves_project(applicat
     mime = QMimeData()
     mime.setUrls([QUrl.fromLocalFile(str(srt))])
     assert not any(e.isAccepted() for e in send_drag(application, window.preview.viewport(), mime))
-    assert window.video is None and not window.cues and '先载入视频' in window.status.text()
+    assert window.session.video is None and not window.cues and '先载入视频' in window.status.text()
     video = tmp_path / 'current.mp4'
     video.touch()
-    window.video = video
+    window.session.video = video
     cues = [Cue(1, 2, 'Original', '原字幕', 'English')]
     project = tmp_path / 'original.yingziproj'
     save_project(project, video, cues)
-    window.project, window.cues = project, cues
+    window.session.project, window.cues = project, cues
     before = project.read_bytes()
     srt.write_text('not an srt file', encoding='utf-8')
     events = send_drag(application, window.preview.viewport(), mime)
     assert not events[-1].isAccepted()
-    assert window.cues == cues and window.project == project and window.video == video
+    assert window.cues == cues and window.session.project == project and window.session.video == video
     assert project.read_bytes() == before and not (tmp_path / 'output').exists()
     window.close()
 
 
 @pytest.mark.parametrize('area', ['preview', 'table', 'context'])
 def test_srt_drop_import_save_undo_and_existing_source_protection(application, tmp_path, monkeypatch, area):
-    monkeypatch.setattr('app.gui.OUTPUT', tmp_path / 'output')
+    monkeypatch.setattr('app.project_session.OUTPUT', tmp_path / 'output')
     video = tmp_path / 'current.mp4'
     video.touch()
     srt = tmp_path / '多行 字幕.SRT'
     source = '1\n00:00:01,000 --> 00:00:03,000\n第一行\n第二行\n\n2\n00:00:04,000 --> 00:00:05,000\n下一条'
     srt.write_text(source, encoding='utf-8')
     window = Studio()
-    window.video = video
+    window.session.video = video
     window.language.setCurrentIndex(window.language.findData('Japanese'))
     window.show()
     application.processEvents()
@@ -188,7 +188,7 @@ def test_srt_drop_import_save_undo_and_existing_source_protection(application, t
     mime.setUrls([QUrl.fromLocalFile(str(srt))])
     target = {'preview': window.preview.viewport(), 'table': window.table.viewport(), 'context': window.context}[area]
     assert all(e.isAccepted() for e in send_drag(application, target, mime))
-    assert window.video == video and window.table.rowCount() == 2
+    assert window.session.video == video and window.table.rowCount() == 2
     assert window.cues[0].text == '第一行\n第二行'
     assert all(c.language == 'Chinese' for c in window.cues)
     assert window.context.text() == '' and window.export_mode.currentData() == 'original'
@@ -196,14 +196,14 @@ def test_srt_drop_import_save_undo_and_existing_source_protection(application, t
     assert window.preview.caption.toPlainText() == '第一行\n第二行'
     assert window.preview.caption_original_lines == 2
     assert window.export_video_button.isEnabled()
-    assert load_project(window.project)[1] == window.cues
+    assert load_project(window.session.project)[1] == window.cues
     assert '第一行\n第二行' in render(window.cues, 'original')
     window.undo_edit()
-    assert window.cues == [] and load_project(window.project)[1] == []
+    assert window.cues == [] and load_project(window.session.project)[1] == []
     window.redo_edit()
     assert len(window.cues) == 2
     window.table.item(0, 3).setText('已校对的文字')
-    assert load_project(window.project)[1][0].text == '已校对的文字'
+    assert load_project(window.session.project)[1][0].text == '已校对的文字'
     assert srt.read_text(encoding='utf-8') == source
     window.close()
 
@@ -212,12 +212,12 @@ def test_srt_import_save_failure_does_not_replace_existing_cues(application, tmp
     window = Studio()
     video = tmp_path / 'current.mp4'
     video.touch()
-    window.video = video
+    window.session.video = video
     window.cues = [Cue(1, 2, 'Existing')]
     srt = tmp_path / 'new.srt'
     srt.write_text('1\n00:00:01,000 --> 00:00:02,000\nNew', encoding='utf-8')
     with monkeypatch.context() as patch:
         patch.setattr('app.project_library.save_project', lambda *args, **kwargs: (_ for _ in ()).throw(OSError('disk full')))
         assert not window.open_input_file(srt)
-    assert window.cues[0].text == 'Existing' and window.project is None
+    assert window.cues[0].text == 'Existing' and window.session.project is None
     window.close()

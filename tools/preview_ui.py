@@ -72,7 +72,7 @@ if args.models:
     dialog.close()
 print('UI preview rendered', flush=True)
 # A preview must never rewrite an existing project when the window closes.
-window.project = None
+window.session.project = None
 window.close()
 window.player.setSource(QUrl())
 app.processEvents()

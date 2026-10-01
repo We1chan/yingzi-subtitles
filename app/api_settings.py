@@ -15,6 +15,13 @@ DEFAULT_API = {'base_url': '', 'model': '', 'response_format': 'auto',
                'concurrency': 2, 'requests_per_minute': 60, 'thinking_mode': 'auto'}
 
 
+def is_loopback(host):
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return str(host).lower() == 'localhost'
+
+
 def completion_url(value):
     value = str(value).strip()
     if not value or any(char.isspace() or ord(char) < 32 for char in value):
@@ -26,11 +33,7 @@ def completion_url(value):
         raise ValueError('API 地址格式无效。') from None
     if not host or parts.username or parts.password or parts.query or parts.fragment:
         raise ValueError('API 地址不能包含密钥、用户名、查询参数或片段。')
-    try:
-        loopback = ipaddress.ip_address(host).is_loopback
-    except ValueError:
-        loopback = host.lower() == 'localhost'
-    if parts.scheme != 'https' and not (parts.scheme == 'http' and loopback):
+    if parts.scheme != 'https' and not (parts.scheme == 'http' and is_loopback(host)):
         raise ValueError('在线 API 请使用 HTTPS；HTTP 仅支持本机地址。')
     path = parts.path.rstrip('/') or '/v1'
     if not path.endswith('/chat/completions'):

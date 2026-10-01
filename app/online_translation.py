@@ -9,7 +9,7 @@ import urllib.error
 import urllib.request
 from urllib.parse import urlsplit
 
-from .api_settings import (completion_url, load_api_key, load_api_settings,
+from .api_settings import (completion_url, is_loopback, load_api_key, load_api_settings,
                            normalize_api, validate_api_key)
 from .translation import LocalTranslator, translation_payload, validate_translation_response
 from .online_queue import RequestGate
@@ -69,7 +69,10 @@ class OnlineTranslator(LocalTranslator):
         self.options = normalize_api(load_api_settings() if options is None else options)
         self.key = validate_api_key(load_api_key(self.options) if key is None else key)
         self.endpoint = completion_url(self.options['base_url'])
-        self.client = urllib.request.build_opener(NoRedirect())
+        # HTTP(S)_PROXY without NO_PROXY makes urllib ignore the registry bypass list,
+        # so a local service would otherwise be reached through the proxy.
+        handlers = [NoRedirect()] + ([urllib.request.ProxyHandler({})] if is_loopback(urlsplit(self.endpoint).hostname) else [])
+        self.client = urllib.request.build_opener(*handlers)
         self.emit = emit
         self.json_fallback = False
         self.diagnostic = lambda record: None

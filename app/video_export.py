@@ -1,5 +1,7 @@
 """Background video export with the same Qt subtitle pixels as the live preview."""
 import argparse
+import collections
+from concurrent.futures import ThreadPoolExecutor
 import json
 import os
 from pathlib import Path
@@ -38,33 +40,48 @@ def probe_video(path, resolution='original'):
 
 
 def build_overlays(cues, mode, style, size, work, progress, cancelled):
-    from .caption_style import render_overlay
+    from .caption_style import render_caption, place_caption
     width, height = size
     manifest = ['ffconcat version 1.0']
-    blank = render_overlay('', style, width, height)
-    if not blank.save(str(work / 'blank.png')):
-        raise OSError('无法保存字幕图层，请检查磁盘空间。')
+
+    def save(tile, filename):
+        if not place_caption(tile, style, width, height).save(str(work / filename)):
+            raise OSError('无法保存字幕图层，请检查磁盘空间。')
 
     def append(filename, duration=None):
         manifest.extend([f"file '{filename}'", 'option framerate 1000'])
         if duration is not None:
             manifest.append(f'duration {duration:.6f}')
 
-    cursor = 0
-    for i, cue in enumerate(cues):
-        if cancelled():
-            raise ExportCancelled()
-        start, end = round(cue.start, 3), round(cue.end, 3)
-        if start > cursor:
-            append('blank.png', start - cursor)
-        image = render_overlay(subtitle_text(cue, mode), style, width, height, mode == 'translated',
-                               len(clean_line(cue.text).splitlines()))
-        filename = f'caption-{i:06d}.png'
-        if not image.save(str(work / filename)):
-            raise OSError('无法保存字幕图层，请检查磁盘空间。')
-        append(filename, max(.001, end - max(start, cursor)))
-        cursor = end
-        progress(round(5 + 20 * (i + 1) / len(cues)), f'准备字幕样式 {i + 1}/{len(cues)}')
+    # Text layout holds the GIL, but full-frame compositing and PNG compression release it and
+    # dominate the cost, so only those run on the pool.
+    workers = min(8, os.cpu_count() or 1)
+    pending = collections.deque()
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix='caption-png') as pool:
+        try:
+            pending.append(pool.submit(save, render_caption('', style, width, height), 'blank.png'))
+            cursor = 0
+            for i, cue in enumerate(cues):
+                if cancelled():
+                    raise ExportCancelled()
+                start, end = round(cue.start, 3), round(cue.end, 3)
+                if start > cursor:
+                    append('blank.png', start - cursor)
+                tile = render_caption(subtitle_text(cue, mode), style, width, height, mode == 'translated',
+                                      len(clean_line(cue.text).splitlines()))
+                filename = f'caption-{i:06d}.png'
+                pending.append(pool.submit(save, tile, filename))
+                # Each queued 4K frame is about 33 MB, so keep only a few in flight.
+                while len(pending) > 2 * workers:
+                    pending.popleft().result()
+                append(filename, max(.001, end - max(start, cursor)))
+                cursor = end
+                progress(round(5 + 20 * (i + 1) / len(cues)), f'准备字幕样式 {i + 1}/{len(cues)}')
+            while pending:
+                pending.popleft().result()
+        finally:
+            for future in pending:
+                future.cancel()
     # Hold a transparent frame after the last subtitle. Never shorten the main video.
     append('blank.png')
     target = work / 'captions.ffconcat'

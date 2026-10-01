@@ -142,8 +142,8 @@ def test_new_models_are_selectable_and_wrong_language_blocks_generation(app, tmp
     dialog.close()
     window = Studio()
     monkeypatch.setattr('app.gui.readiness', lambda options: {'语音识别': True, '时间轴对齐': True, '字幕翻译': True, '翻译引擎': True, '扩展识别引擎': True})
-    window.video = tmp_path / 'video.mp4'
-    window.video.touch()
+    window.session.video = tmp_path / 'video.mp4'
+    window.session.video.touch()
     window.model_selection['asr_model'] = str(MODELS / 'parakeet-tdt-0.6b-v2-onnx')
     window.language.setCurrentIndex(window.language.findData('Japanese'))
     window.refresh_models()

@@ -128,7 +128,7 @@ def test_encoded_pixels_timing_audio_and_tail(application, tmp_path):
 def test_imported_multiline_srt_keeps_video_and_matches_preview_in_encoded_output(application, tmp_path, monkeypatch):
     import imageio_ffmpeg
     from app.caption_style import render_caption
-    monkeypatch.setattr('app.gui.OUTPUT', tmp_path / 'projects')
+    monkeypatch.setattr('app.project_session.OUTPUT', tmp_path / 'projects')
     video, target = tmp_path / 'video.mp4', tmp_path / 'subtitled.mp4'
     run_ffmpeg(['-v', 'error', '-f', 'lavfi', '-i', 'color=c=black:s=320x180:r=25:d=2',
                 '-c:v', 'libx264', '-pix_fmt', 'yuv420p', video])
@@ -143,7 +143,7 @@ def test_imported_multiline_srt_keeps_video_and_matches_preview_in_encoded_outpu
     window.import_srt(source)
     window.preview.set_video_size(QSizeF(320, 180))
     window.position_changed(500)
-    assert window.player.source() == media_source and window.video == video.resolve()
+    assert window.player.source() == media_source and window.session.video == video.resolve()
     assert window.preview.caption.toPlainText() == 'First line\nSecond line'
     expected_tile = render_caption('First line\nSecond line', style, 320, 180, original_lines=2)
     assert np.array_equal(rgb(window.preview.caption.pixmap().toImage()), rgb(expected_tile))
@@ -159,6 +159,22 @@ def test_imported_multiline_srt_keeps_video_and_matches_preview_in_encoded_outpu
     assert frames[0].max() < 20 and frames[35].max() < 20
     assert source.read_bytes() == original
     window.close()
+
+
+def test_overlay_pool_reports_disk_errors_and_stops_on_cancel(application, tmp_path):
+    from app.video_export import build_overlays
+    cues = [Cue(i, i + .5, f'Line {i}') for i in range(40)]
+    with pytest.raises(OSError, match='字幕图层'):
+        build_overlays(cues, 'original', CaptionStyle(), (320, 180), tmp_path / 'missing', lambda *args: None, lambda: False)
+    checks = []
+    def cancelled():
+        checks.append(None)
+        return len(checks) > 10
+    with pytest.raises(ExportCancelled):
+        build_overlays(cues, 'original', CaptionStyle(), (320, 180), tmp_path, lambda *args: None, cancelled)
+    # The pool is drained before returning, so nothing is written for cues after the cancel point.
+    assert len(list(tmp_path.glob('caption-*.png'))) <= 10
+    assert not list(tmp_path.glob('captions.ffconcat'))
 
 
 def test_audio_only_rejected_and_style_values_sanitized(application, tmp_path):
@@ -189,10 +205,10 @@ def test_gui_export_process_success_cancel_and_failure(application, tmp_path):
         timer.setSingleShot(True)
         timer.timeout.connect(loop.quit)
         timer.start(15000)
-        window.worker.finished.connect(loop.quit)
+        window.jobs.process.finished.connect(loop.quit)
         loop.exec()
         assert not window.busy(), window.status.text()
-        assert window.export_work is None
+        assert window.jobs.export_work is None
         assert window.export_video_button.isEnabled()
         assert not list(tmp_path.glob('.yingzi-export-*'))
 
@@ -207,7 +223,7 @@ def test_gui_export_process_success_cancel_and_failure(application, tmp_path):
     assert '已取消' in window.status.text() and target.read_bytes() == old
     audio = tmp_path / 'audio.wav'
     run_ffmpeg(['-y', '-f', 'lavfi', '-i', 'sine=duration=0.1', audio])
-    window.video = audio
+    window.session.video = audio
     window.start_video_export(target)
     wait()
     assert '纯音频' in window.status.text() and target.read_bytes() == old

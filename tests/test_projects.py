@@ -30,7 +30,7 @@ def application():
 
 @pytest.fixture
 def window(application, tmp_path, monkeypatch):
-    monkeypatch.setattr('app.gui.OUTPUT', tmp_path / 'output')
+    monkeypatch.setattr('app.project_session.OUTPUT', tmp_path / 'output')
     monkeypatch.setattr('app.gui.audio_tracks', lambda path: ['默认音轨'])
     studio = Studio()
     studio.model_timer.stop()
@@ -43,7 +43,7 @@ def test_import_media_creates_draft_and_autosaves_generation_settings(window, tm
     video = tmp_path / '尚未生成.mp4'
     video.touch()
     window.load_video(video)
-    project = window.project
+    project = window.session.project
     assert input_kind(project) == 'project' and project.suffix == '.yingziproj'
     assert load_project(project)[0]['status'] == 'draft'
     window.language.setCurrentIndex(window.language.findData('English'))
@@ -97,10 +97,10 @@ def test_switching_media_flushes_pending_options_before_new_draft(window, tmp_pa
     first.touch()
     second.touch()
     window.load_video(first)
-    old_project = window.project
+    old_project = window.session.project
     window.context.setText('即将关闭时刚刚填写')
     window.load_video(second)
-    assert window.project != old_project
+    assert window.session.project != old_project
     assert load_project(old_project)[0]['options']['context'] == '即将关闭时刚刚填写'
     assert load_project(old_project)[0]['video'] == str(first)
 
@@ -113,7 +113,7 @@ def test_save_as_preserves_workspace_and_worker_updates_named_file(window, tmp_p
     window.load_saved_project(original)
     monkeypatch.setattr('app.gui.QInputDialog.getText', lambda *args, **kwargs: ('另存 工程 #1', True))
     window.save_project_as()
-    target = window.project
+    target = window.session.project
     assert window.library.contains(target) and project_workspace(target) != workspace
     assert project_workspace(target).parent == target.parent
     original_bytes = original.read_bytes()
@@ -121,7 +121,7 @@ def test_save_as_preserves_workspace_and_worker_updates_named_file(window, tmp_p
     window.save_edits()
     assert original.read_bytes() == original_bytes
     monkeypatch.setattr(worker, 'event', lambda *args, **kwargs: None)
-    worker.process({'video': str(window.video), 'output': str(project_workspace(target)), 'resume_project': str(target), 'bilingual': False})
+    worker.process({'video': str(window.session.video), 'output': str(project_workspace(target)), 'resume_project': str(target), 'bilingual': False})
     assert load_project(target)[1][0].text == '继续校对'
     assert load_project(target)[0]['editor']['step'] == 1
     assert not (workspace / 'subtitles.yingziproj').exists()
@@ -134,14 +134,14 @@ def test_save_as_cancel_and_failure_keep_active_project(window, tmp_path, monkey
     window.load_saved_project(project)
     monkeypatch.setattr('app.gui.QInputDialog.getText', lambda *args, **kwargs: ('', False))
     window.save_project_as()
-    assert window.project == project
+    assert window.session.project == project
     monkeypatch.setattr('app.gui.QInputDialog.getText', lambda *args, **kwargs: ('failed', True))
     warnings = []
     monkeypatch.setattr('app.gui.QMessageBox.warning', lambda *args: warnings.append(args[2]))
     with monkeypatch.context() as patch:
-        patch.setattr('app.gui.save_project', lambda *args, **kwargs: (_ for _ in ()).throw(OSError('disk full')))
+        patch.setattr('app.project_session.save_project', lambda *args, **kwargs: (_ for _ in ()).throw(OSError('disk full')))
         window.save_project_as()
-    assert window.project == project and window.cues[0].text == '保留'
+    assert window.session.project == project and window.cues[0].text == '保留'
     assert warnings and not window.library.scan()
 
 
@@ -192,7 +192,7 @@ def test_corrupt_project_keeps_open_session(window, tmp_path, invalid):
     broken = tmp_path / 'broken.yingziproj'
     broken.write_text(json.dumps(invalid), encoding='utf-8')
     assert not window.open_input_file(broken)
-    assert window.project == active and window.cues[0].text == '保留'
+    assert window.session.project == active and window.cues[0].text == '保留'
 
 
 def test_worker_running_cannot_be_overwritten_by_ui_autosave(window, tmp_path, monkeypatch):
@@ -219,8 +219,8 @@ def test_fresh_generation_keeps_named_project_and_uses_new_cache(window, tmp_pat
     jobs = []
     monkeypatch.setattr(window, 'launch', jobs.append)
     window.start_job()
-    assert window.project == project and window.output_dir != workspace
-    assert project_workspace(project) == window.output_dir
+    assert window.session.project == project and window.session.output_dir != workspace
+    assert project_workspace(project) == window.session.output_dir
     assert load_project(project)[0]['status'] == 'recognizing'
     assert window.cues == [] and len(jobs) == 1
 
@@ -264,7 +264,7 @@ class ProbeStudio(gui.Studio):
     def load_saved_project(self, filename):
         super().load_saved_project(filename)
         opened = json.loads(events.read_text(encoding='utf-8')) if events.exists() else []
-        opened.append(str(self.project))
+        opened.append(str(self.session.project))
         events.write_text(json.dumps(opened), encoding='utf-8')
         if len(opened) == 2:
             QTimer.singleShot(200, self.close)

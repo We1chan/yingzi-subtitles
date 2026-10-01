@@ -41,15 +41,15 @@ def test_named_blank_project_attaches_media_without_creating_another_project(stu
     monkeypatch.setattr(dialog, 'exec', lambda: QDialog.Accepted)
     monkeypatch.setattr('app.gui.NewProjectDialog', lambda *args: dialog)
     studio.new_project()
-    project = studio.project
+    project = studio.session.project
     data, cues = load_project(project)
     assert data['video'] == '' and data['status'] == 'draft' and not cues
-    assert studio.video is None and studio.library.contains(project)
+    assert studio.session.video is None and studio.library.contains(project)
     assert not studio.start_button.isEnabled()
     media = tmp_path / 'new.mp4'
     media.touch()
     studio.load_video(media)
-    assert studio.project == project and len(studio.library.scan()) == 1
+    assert studio.session.project == project and len(studio.library.scan()) == 1
     assert load_project(project)[0]['video'] == str(media)
     assert project_workspace(project) == project.parent / 'work'
     assert studio.export_folder() == project.parent / 'exports'
@@ -65,7 +65,7 @@ def test_project_home_search_sort_filter_open_and_return(studio, tmp_path):
     assert home.cards.count() == 1
     home.cards.setCurrentRow(0)
     home.open_button.click()
-    assert studio.project == first and studio.screen_stack.currentIndex() == 1
+    assert studio.session.project == first and studio.screen_stack.currentIndex() == 1
     studio.open_project_button.click()
     assert studio.screen_stack.currentIndex() == 0 and not home.resume.isHidden()
     home.resume.click()
@@ -85,10 +85,10 @@ def test_rename_active_project_keeps_autosave_on_new_filename(studio, monkeypatc
     studio.show_project_library()
     monkeypatch.setattr('app.gui.QInputDialog.getText', lambda *args, **kwargs: ('新名称', True))
     studio.rename_library_project(str(path))
-    assert not path.exists() and studio.project.name == '新名称.yingziproj'
+    assert not path.exists() and studio.session.project.name == '新名称.yingziproj'
     studio.context.setText('改名后继续编辑')
     studio.save_edits()
-    assert load_project(studio.project)[0]['options']['context'] == '改名后继续编辑'
+    assert load_project(studio.session.project)[0]['options']['context'] == '改名后继续编辑'
     assert not path.exists() and studio.library.scan()[0].name == '新名称'
 
 
@@ -106,7 +106,7 @@ def test_trash_active_project_cannot_be_recreated_by_autosave_and_restores_cache
     monkeypatch.setattr('app.gui.QMessageBox.question', lambda *args: __import__('PySide6.QtWidgets', fromlist=['QMessageBox']).QMessageBox.Yes)
     studio.trash_library_project(str(path))
     QTest.qWait(500)
-    assert studio.project is None and not path.exists() and media.exists()
+    assert studio.session.project is None and not path.exists() and media.exists()
     assert studio.library.scan() == []
     trashed = studio.library.scan(trash=True)[0].path
     assert project_workspace(trashed).is_dir()
@@ -269,12 +269,12 @@ def test_trash_releases_embedded_real_media_and_recovers_if_move_fails(studio, m
         monkeypatch.setattr(studio.library, 'trash', fail_move)
     studio.trash_library_project(str(path))
     if fail:
-        assert studio.project == path and media.read_bytes() == content
+        assert studio.session.project == path and media.read_bytes() == content
         assert Path(studio.player.source().toLocalFile()) == media
         assert studio.cues[0].text == '保留字幕'
         assert 'injected move failure' in studio.project_home.notice.text()
     else:
-        assert studio.project is None and not media.exists()
+        assert studio.session.project is None and not media.exists()
         entry = studio.library.scan(trash=True)[0]
         assert entry.video.read_bytes() == content
         restored = studio.library.restore(entry.path)

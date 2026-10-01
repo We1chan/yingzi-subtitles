@@ -6,6 +6,7 @@ import subprocess
 import time
 import urllib.error
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 
 from .config import LOGS, TRANSLATE_PATH, server_path
 from .media import CREATE_NO_WINDOW
@@ -65,11 +66,17 @@ def validate_translation_response(result, rows):
     return translations
 
 
+GPU_SLOTS = 4
+SLOT_CONTEXT = 4096
+
+
 class LocalTranslator:
-    def __init__(self, emit=lambda *args: None, gpu_layers=99, model_path=TRANSLATE_PATH):
+    def __init__(self, emit=lambda *args: None, gpu_layers=99, model_path=TRANSLATE_PATH, slots=None):
         self.emit = emit
         self.gpu_layers = gpu_layers
         self.model_path = model_path
+        # Batched decoding pays off on the GPU; on CPU the slots would only split the same threads.
+        self.slots = slots or (GPU_SLOTS if gpu_layers else 1)
         self.process = None
         self.log = None
         self.key = secrets.token_hex(24)
@@ -77,21 +84,30 @@ class LocalTranslator:
         self.client = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
     def start(self):
+        self.log = (LOGS / 'translator.log').open('w', encoding='utf-8')
+        # Extra slots need more KV cache; if that does not fit beside other GPU work, use one slot.
+        for slots in dict.fromkeys((self.slots, 1)):
+            self.slots = slots
+            if self.launch():
+                return
+        raise RuntimeError('本地翻译引擎启动失败，详情见 logs/translator.log。可切换“CPU 兼容”后重试。')
+
+    def launch(self):
         with socket.socket() as sock:
             sock.bind(('127.0.0.1', 0))
             self.port = sock.getsockname()[1]
-        self.log = (LOGS / 'translator.log').open('w', encoding='utf-8')
-        command = [str(server_path()), '-m', str(self.model_path), '--host', '127.0.0.1', '--port', str(self.port), '--api-key', self.key, '-c', '4096', '-ngl', str(self.gpu_layers), '-t', str(min(8, os.cpu_count() or 4)), '--parallel', '1', '--no-webui']
+        # Each slot keeps the context a single-slot server had.
+        command = [str(server_path()), '-m', str(self.model_path), '--host', '127.0.0.1', '--port', str(self.port), '--api-key', self.key, '-c', str(SLOT_CONTEXT * self.slots), '-ngl', str(self.gpu_layers), '-t', str(min(8, os.cpu_count() or 4)), '--parallel', str(self.slots), '--no-webui']
         self.process = subprocess.Popen(command, stdout=self.log, stderr=subprocess.STDOUT, creationflags=CREATE_NO_WINDOW)
         deadline = time.monotonic() + 180
         while time.monotonic() < deadline:
             if self.process.poll() is not None:
-                raise RuntimeError('本地翻译引擎启动失败，详情见 logs/translator.log。可切换“CPU 兼容”后重试。')
+                return False
             try:
                 request = urllib.request.Request(f'http://127.0.0.1:{self.port}/health', headers={'Authorization': f'Bearer {self.key}'})
                 with self.client.open(request, timeout=2) as response:
                     if response.status == 200:
-                        return
+                        return True
             except (OSError, urllib.error.URLError):
                 pass
             time.sleep(0.4)
@@ -102,12 +118,22 @@ class LocalTranslator:
             return {}
         # Translate one cue at a time so the model cannot move a clause into another ID.
         # Neighboring source text still disambiguates names, pronouns and idioms.
+        # The single-cue requests only read source text, so the server slots can run them together.
         if len(rows) > 1:
-            result = {}
-            for index, row in enumerate(rows):
+            def single(index):
                 previous = context + '\n' + '\n'.join(item['text'] for item in rows[:index])
                 following = '\n'.join(item['text'] for item in rows[index + 1:]) + '\n' + following_context
-                result.update(self.translate([row], previous, following))
+                return self.translate([rows[index]], previous, following)
+            result = {}
+            with ThreadPoolExecutor(max_workers=min(self.slots, len(rows)), thread_name_prefix='local-translation') as pool:
+                futures = [pool.submit(single, index) for index in range(len(rows))]
+                try:
+                    for future in futures:
+                        result.update(future.result())
+                except BaseException:
+                    for future in futures:
+                        future.cancel()
+                    raise
             return result
         ids = [row['id'] for row in rows]
         payload = translation_payload(rows, context, following_context, glossary=getattr(self, 'glossary', ''),

@@ -67,7 +67,7 @@ def test_quality_filter_and_selected_retranslation_do_not_change_other_rows(appl
 
 def test_waveform_mouse_drag_changes_timing_and_undo_restores(application, tmp_path):
     window = Studio()
-    window.video = tmp_path / 'missing.mp4'
+    window.session.video = tmp_path / 'missing.mp4'
     window.cues = [Cue(1, 3, 'Hello', language='English'), Cue(3.5, 5, 'Next', language='English')]
     window.fill_table()
     window.show()

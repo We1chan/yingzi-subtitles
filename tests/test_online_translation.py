@@ -6,6 +6,7 @@ import socket
 import ssl
 import threading
 import urllib.error
+import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 os.environ['QT_QPA_PLATFORM'] = 'offscreen'
@@ -220,10 +221,10 @@ def test_settings_dialog_and_gui_online_process(application, settings, tmp_path,
                     'from pathlib import Path; from app import config; config.SETTINGS=Path(' + repr(str(settings)) + '); from app.worker import main; raise SystemExit(main())',
                     '--job', str(tmp_path / 'job.json')])
                 super().start()
-        monkeypatch.setattr('app.gui.QProcess', TestProcess)
+        monkeypatch.setattr('app.job_runner.QProcess', TestProcess)
         window.retry_translation()
         loop = QEventLoop()
-        window.worker.finished.connect(loop.quit)
+        window.jobs.process.finished.connect(loop.quit)
         QTimer.singleShot(10000, loop.quit)
         loop.exec()
         assert not window.busy() and window.cues[0].translation == '你好。'
@@ -565,6 +566,21 @@ def test_real_disconnection_recovery_keeps_parallel_worker_running(settings, tmp
     diagnostics = [json.loads(line) for line in (tmp_path / 'api-diagnostics.jsonl').read_text(encoding='utf-8').splitlines()]
     failed = next(d for d in diagnostics if 'error_category' in d)
     assert failed['error_category'] == 'connection_reset' and failed['ids'] == [2, 3]
+
+
+def test_loopback_service_bypasses_environment_proxy_and_remote_keeps_it(monkeypatch):
+    # Port 9 refuses connections, so any request routed through this proxy would fail.
+    for name in ('HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy'):
+        monkeypatch.setenv(name, 'http://127.0.0.1:9')
+    for name in ('NO_PROXY', 'no_proxy'):
+        monkeypatch.delenv(name, raising=False)
+    with api_server() as (options, requests):
+        translator = OnlineTranslator(options, 'test-key')
+        assert translator.translate([{'id': 1, 'text': 'Hello', 'language': 'English'}]) == {1: '你好。'}
+        assert len(requests) == 1
+    remote = OnlineTranslator({**DEFAULT_API, 'base_url': 'https://service.example/v1', 'model': 'test'}, 'test-key')
+    proxies = [handler.proxies for handler in remote.client.handlers if isinstance(handler, urllib.request.ProxyHandler)]
+    assert proxies and proxies[0].get('https') == 'http://127.0.0.1:9'
 
 
 def test_retry_wait_honors_queue_stop():

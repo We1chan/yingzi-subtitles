@@ -167,7 +167,11 @@ def render_caption(text, style, width, height, translated_only=False, original_l
 
 
 def render_overlay(text, style, width, height, translated_only=False, original_lines=1):
-    tile = render_caption(text, style, width, height, translated_only, original_lines)
+    return place_caption(render_caption(text, style, width, height, translated_only, original_lines), style, width, height)
+
+
+def place_caption(tile, style, width, height):
+    """Put a rendered tile on a transparent full frame. No text layout, so it is safe in worker threads."""
     canvas = QImage(width, height, QImage.Format_ARGB32_Premultiplied)
     canvas.fill(Qt.transparent)
     painter = QPainter(canvas)

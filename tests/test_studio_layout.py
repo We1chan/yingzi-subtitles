@@ -24,7 +24,7 @@ def window(app):
     window = Studio()
     window.model_timer.stop()
     yield window
-    window.project = None
+    window.session.project = None
     window.close()
 
 
@@ -115,7 +115,7 @@ def test_contextual_actions_require_compatible_selection_and_lock_while_busy(win
 
 
 def test_export_readiness_tracks_content_translation_and_missing_media(window, tmp_path):
-    window.video = tmp_path / 'missing.mp4'
+    window.session.video = tmp_path / 'missing.mp4'
     window.cues = [Cue(0, 2, 'Hello', language='English')]
     window.fill_table()
     assert not window.export_button.isEnabled()
@@ -123,18 +123,18 @@ def test_export_readiness_tracks_content_translation_and_missing_media(window, t
     window.export_mode.setCurrentIndex(window.export_mode.findData('original'))
     assert window.export_button.isEnabled() and not window.export_video_button.isEnabled()
     assert '原媒体缺失' in window.export_summary.text()
-    window.video.touch()
+    window.session.video.touch()
     window.refresh_workspace()
     assert window.export_video_button.isEnabled()
-    window.project_status = 'aligning'
+    window.session.status = 'aligning'
     window.fill_table()
     assert not window.export_button.isEnabled() and not window.export_video_button.isEnabled()
 
 
 def test_subtitle_import_button_opens_review_and_new_project_clears_search(window, tmp_path, monkeypatch):
-    monkeypatch.setattr('app.gui.OUTPUT', tmp_path / 'output')
-    window.video = tmp_path / 'video.mp4'
-    window.video.touch()
+    monkeypatch.setattr('app.project_session.OUTPUT', tmp_path / 'output')
+    window.session.video = tmp_path / 'video.mp4'
+    window.session.video.touch()
     srt = tmp_path / 'existing.srt'
     srt.write_text('1\n00:00:01,000 --> 00:00:03,000\n已有字幕', encoding='utf-8')
     monkeypatch.setattr('app.gui.QFileDialog.getOpenFileName', lambda *args: (str(srt), ''))
@@ -143,7 +143,7 @@ def test_subtitle_import_button_opens_review_and_new_project_clears_search(windo
     assert len(window.cues) == 1 and window.step_buttons[1].isChecked()
     assert window.export_mode.currentData() == 'original'
     window.subtitle_search.setText('no match')
-    window.load_saved_project(window.project)
+    window.load_saved_project(window.session.project)
     assert window.subtitle_search.text() == '' and not window.table.isRowHidden(0)
 
 
