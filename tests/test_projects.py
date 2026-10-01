@@ -111,16 +111,17 @@ def test_save_as_preserves_workspace_and_worker_updates_named_file(window, tmp_p
     workspace.mkdir()
     save_project(original, tmp_path / 'missing.mp4', [Cue(0, 2, '字幕')], workspace=workspace)
     window.load_saved_project(original)
-    target = tmp_path / '另存 工程 #1.yingziproj'
-    monkeypatch.setattr('app.gui.QFileDialog.getSaveFileName', lambda *args: (str(target), ''))
+    monkeypatch.setattr('app.gui.QInputDialog.getText', lambda *args, **kwargs: ('另存 工程 #1', True))
     window.save_project_as()
-    assert window.project == target and project_workspace(target) == workspace
+    target = window.project
+    assert window.library.contains(target) and project_workspace(target) != workspace
+    assert project_workspace(target).parent == target.parent
     original_bytes = original.read_bytes()
     window.cues[0].text = '继续校对'
     window.save_edits()
     assert original.read_bytes() == original_bytes
     monkeypatch.setattr(worker, 'event', lambda *args, **kwargs: None)
-    worker.process({'video': str(window.video), 'output': str(workspace), 'resume_project': str(target), 'bilingual': False})
+    worker.process({'video': str(window.video), 'output': str(project_workspace(target)), 'resume_project': str(target), 'bilingual': False})
     assert load_project(target)[1][0].text == '继续校对'
     assert load_project(target)[0]['editor']['step'] == 1
     assert not (workspace / 'subtitles.yingziproj').exists()
@@ -131,18 +132,17 @@ def test_save_as_cancel_and_failure_keep_active_project(window, tmp_path, monkey
     project = tmp_path / 'active.yingziproj'
     save_project(project, tmp_path / 'missing.mp4', [Cue(0, 2, '保留')])
     window.load_saved_project(project)
-    monkeypatch.setattr('app.gui.QFileDialog.getSaveFileName', lambda *args: ('', ''))
+    monkeypatch.setattr('app.gui.QInputDialog.getText', lambda *args, **kwargs: ('', False))
     window.save_project_as()
     assert window.project == project
-    target = tmp_path / 'failed.yingziproj'
-    monkeypatch.setattr('app.gui.QFileDialog.getSaveFileName', lambda *args: (str(target), ''))
+    monkeypatch.setattr('app.gui.QInputDialog.getText', lambda *args, **kwargs: ('failed', True))
     warnings = []
     monkeypatch.setattr('app.gui.QMessageBox.warning', lambda *args: warnings.append(args[2]))
     with monkeypatch.context() as patch:
         patch.setattr('app.gui.save_project', lambda *args, **kwargs: (_ for _ in ()).throw(OSError('disk full')))
         window.save_project_as()
     assert window.project == project and window.cues[0].text == '保留'
-    assert warnings and not target.exists()
+    assert warnings and not window.library.scan()
 
 
 def test_bundle_move_resolves_relative_media_and_workspace(tmp_path):
@@ -258,6 +258,7 @@ root = Path(sys.argv[1])
 project = sys.argv[2]
 gui.ROOT = root
 gui.CACHE = root
+gui.PROJECTS = root / 'projects'
 events = root / 'opened.json'
 class ProbeStudio(gui.Studio):
     def load_saved_project(self, filename):
@@ -286,8 +287,10 @@ sys.exit(gui.main())
         assert forwarded.returncode == 0, forwarded.stderr.decode('utf-8', errors='replace')
         _, errors = running.communicate(timeout=10)
         assert running.returncode == 0, errors.decode('utf-8', errors='replace')
-        assert json.loads(events.read_text(encoding='utf-8')) == [str(first), str(second)]
-        assert load_project(second)[0]['editor']['step'] == 1
+        opened = [Path(path) for path in json.loads(events.read_text(encoding='utf-8'))]
+        assert [path.stem for path in opened] == [first.stem, second.stem]
+        assert all(path.is_relative_to(tmp_path / 'projects') for path in opened)
+        assert load_project(opened[1])[0]['editor']['step'] == 1
     finally:
         if running.poll() is None:
             running.kill()

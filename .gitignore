@@ -3,6 +3,7 @@
 models/
 runtime/
 output/
+projects/
 logs/
 __pycache__/
 *.pyc

@@ -93,14 +93,15 @@ def test_project_drop_and_invalid_project_report(application, tmp_path):
     mime = QMimeData()
     mime.setUrls([QUrl.fromLocalFile(str(project))])
     assert all(event.isAccepted() for event in send_drag(application, window.preview.viewport(), mime))
-    assert window.project == project and window.cues == cues
+    imported = window.project
+    assert window.library.contains(imported) and project.exists() and window.cues == cues
     broken = tmp_path / 'broken.yingziproj'
     broken.write_text('{', encoding='utf-8')
     mime.setUrls([QUrl.fromLocalFile(str(broken))])
     events = send_drag(application, window.preview.viewport(), mime)
     assert not events[-1].isAccepted()
     assert '无法打开拖入的文件' in window.status.text()
-    assert window.project == project and window.cues == cues
+    assert window.project == imported and window.cues == cues
     window.close()
 
 
@@ -216,7 +217,7 @@ def test_srt_import_save_failure_does_not_replace_existing_cues(application, tmp
     srt = tmp_path / 'new.srt'
     srt.write_text('1\n00:00:01,000 --> 00:00:02,000\nNew', encoding='utf-8')
     with monkeypatch.context() as patch:
-        patch.setattr('app.gui.save_project', lambda *args, **kwargs: (_ for _ in ()).throw(OSError('disk full')))
+        patch.setattr('app.project_library.save_project', lambda *args, **kwargs: (_ for _ in ()).throw(OSError('disk full')))
         assert not window.open_input_file(srt)
     assert window.cues[0].text == 'Existing' and window.project is None
     window.close()

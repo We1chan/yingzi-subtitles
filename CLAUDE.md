@@ -12,12 +12,13 @@ Everything runs on the project venv (Python 3.12). From PowerShell:
 
 ```powershell
 .\.venv\Scripts\python.exe main.py                       # launch the GUI
-.\.venv\Scripts\python.exe -m pytest -q                  # full suite (~35 s, no models needed)
+.\.venv\Scripts\python.exe -m pytest -q                  # full suite (~60 s, no models needed)
 .\.venv\Scripts\python.exe -m pytest -q tests/test_pipeline.py::test_name   # single test
 .\.venv\Scripts\python.exe tools\preview_ui.py --demo --stage review --size 1100x760 --output logs\ui.png   # render UI offscreen to a PNG
+.\.venv\Scripts\python.exe tools\preview_projects.py --demo --size 1100x760 --output logs\projects.png
 ```
 
-Real-model checks (need downloaded models; fetch test audio into the gitignored `tests/fixtures/` and write to `output/`):
+Real-model checks (need downloaded models; fetch test audio into the gitignored `tests/fixtures/` and write to `projects/`):
 
 ```powershell
 .\.venv\Scripts\python.exe tools\run_validation.py [--languages english] [--asr-model models/Qwen3-ASR-0.6B] [--device cpu]
@@ -55,6 +56,10 @@ The GUI never runs inference in-process. Every job is a child process that talks
 
 ## Project file and state
 
+`gui.main` starts on `ProjectHome` (a card library with search, sorting, filters and trash), then uses `Studio.screen_stack` to switch to the existing editor. `ProjectLibrary` owns `projects/<name>_<id>/`: the named `.yingziproj`, thumbnail/sidecar metadata, `work/` caches and default `exports/`. A blank draft has an empty media path and no cues; attaching media must keep that named project. GUI tests isolate `gui.PROJECTS` through `tests/conftest.py` so they never pollute the user's library.
+
+External project opens use `ProjectLibrary.adopt` to copy content and recovery caches into an independent folder; matching unchanged imports reuse the edited library copy. Save As clones into another library folder with independent caches. Trash moves the whole owned folder into `projects/.trash/`, rebases internal media/workspace/cache paths and refuses shared resource removal; active autosave and media handles must be released. `tools/organize_projects.py` collects old `output/` folders with a validated transaction and exact rollback of changed JSON. Always use `project_workspace`, not the project parent, for processing caches.
+
 `.yingziproj` and default `subtitles.yingziproj` (`subtitles.save_project/load_project`, `version: 1`) hold `video`, `options`, `status`, and `cues` (the `Cue` dataclass: `start, end, text, translation, language, translation_error`). Optional `workspace` locates processing output and `.pipeline/`, while `editor` stores the playhead, selected rows, step, preview state, filters and last export target. Relative media/workspace paths support moving a bundle. Use `subtitles.project_workspace` rather than assuming the project lives next to its cache. GUI import immediately creates a draft project; generation and worker checkpoints retain its chosen filename through `job.project_path`. The worker strips `project_path` and `editor_state` from saved processing options. Loading blocks autosave; UI autosave never writes while the worker owns the project. `tools/register_project.ps1` registers the current-user file association; `gui.main` forwards subsequent opens to the running app over a local socket.
 
 `status` drives what "继续处理/继续翻译" does: `recognizing` / `aligning` → rerun the pipeline from cache; `translating` / `translation_partial` → translate only the cues where `needs_translation()` is true (Japanese/English with an empty or failed translation). The editor requires validated, non-overlapping cues. Write files through `subtitles.atomic_write` (tmp + replace; `.srt` gets a UTF-8 BOM).
@@ -82,4 +87,4 @@ The API key is DPAPI-encrypted in the gitignored `settings.json` (`api_settings.
 - Model paths in settings and jobs resolve relative to the repo root (`config.model_paths`).
 - Qt tests set `os.environ['QT_QPA_PLATFORM'] = 'offscreen'` before importing PySide6 and share a module-scoped `QApplication` fixture. Online-translation tests use a local fake HTTP server (`api_server` in `tests/test_online_translation.py`), never a real API.
 - Code style: single quotes, compact functions, few comments; comments explain *why*.
-- `VALIDATION.md` is a dated log of verification runs (test counts, real-model trials, screenshots under `logs/`). `models/`, `runtime/`, `output/`, `logs/`, `.cache/` and `settings.json` are gitignored and hold local-only artifacts.
+- `VALIDATION.md` is a dated log of verification runs (test counts, real-model trials, screenshots under `logs/`). `models/`, `runtime/`, `output/`, `projects/`, `logs/`, `.cache/` and `settings.json` are gitignored and hold local-only artifacts.

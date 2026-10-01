@@ -8,6 +8,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 from app.media import run_ffmpeg
+from app.config import PROJECTS
 from app.subtitles import load_project, validate
 
 
@@ -42,7 +43,7 @@ def main():
         video = fixtures / f'{tag}-{args.seconds}s-test.mp4'
         run_ffmpeg(['-y', '-f', 'lavfi', '-i', 'color=c=0x142a35:s=1280x720:r=24', '-i', source, '-t', str(args.seconds), '-c:v', 'libx264', '-preset', 'ultrafast', '-c:a', 'aac', '-shortest', video])
         folder = {'chinese': '验证_中文', 'japanese': '验证_日中双语', 'english': '验证_英中双语'}[name]
-        out = ROOT / 'output' / (folder + ('_' + Path(args.asr_model).name if args.asr_model else ''))
+        out = PROJECTS / (folder + ('_' + Path(args.asr_model).name if args.asr_model else ''))
         if args.device == 'cpu':
             out = out.with_name(out.name + '_CPU')
         job = {'video': str(video), 'output': str(out), 'language': language, 'bilingual': bilingual, 'track': 0, 'device': args.device, 'max_chars': 68 if language == 'English' else 30}

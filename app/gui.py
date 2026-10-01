@@ -19,9 +19,11 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QFrame, QLabe
     QVBoxLayout, QLineEdit, QFileDialog, QMessageBox, QTableWidgetItem,
     QGraphicsView, QGraphicsScene, QGraphicsTextItem, QAbstractItemView,
     QPlainTextEdit, QDialog, QGraphicsPixmapItem, QGraphicsItem,
-    QFormLayout, QDialogButtonBox, QCheckBox, QMenu)
+    QFormLayout, QDialogButtonBox, QCheckBox, QMenu, QStackedWidget, QInputDialog)
 
-from .config import ROOT, CACHE, OUTPUT, LOGS, readiness, load_model_selection, save_model_selection, MODEL_DEFAULTS, asr_language_issue, asr_backend
+from .config import ROOT, CACHE, OUTPUT, PROJECTS, LOGS, readiness, load_model_selection, save_model_selection, MODEL_DEFAULTS, asr_language_issue, asr_backend
+from .project_library import ProjectLibrary
+from .project_home import ProjectHome, NewProjectDialog
 from .media import audio_tracks, CREATE_NO_WINDOW
 from .subtitles import timestamp, parse_time, validate, render, atomic_write, load_project, save_project, subtitle_text, needs_translation, clean_line, project_workspace
 from .caption_style import CaptionStyle, render_caption, caption_position
@@ -215,6 +217,7 @@ class Studio(QMainWindow):
         self._restore_position = None
         self.last_export_target = ''
         self.output_dir = OUTPUT
+        self.library = ProjectLibrary(PROJECTS)
         self.cues = []
         self.cue_starts = []
         self.history = EditHistory()
@@ -264,6 +267,7 @@ class Studio(QMainWindow):
         QShortcut(QKeySequence.Save, self, activated=self.save_current_project)
         QShortcut(QKeySequence('Ctrl+Shift+S'), self, activated=self.save_project_as)
         QShortcut(QKeySequence('Ctrl+Shift+O'), self, activated=self.open_project)
+        QShortcut(QKeySequence('Ctrl+N'), self, activated=self.new_project)
         QShortcut(QKeySequence('Ctrl+O'), self, activated=self.choose_video)
         QShortcut(QKeySequence.Undo, self, activated=self.undo_edit)
         QShortcut(QKeySequence.Redo, self, activated=self.redo_edit)
@@ -289,6 +293,137 @@ class Studio(QMainWindow):
 
     def build_ui(self):
         build_studio(self, VideoView)
+        editor = self.takeCentralWidget()
+        self.project_home = ProjectHome(self.library, self)
+        self.screen_stack = QStackedWidget(self)
+        self.screen_stack.addWidget(self.project_home)
+        self.screen_stack.addWidget(editor)
+        self.screen_stack.setCurrentIndex(1)
+        self.setCentralWidget(self.screen_stack)
+        self.project_home.openRequested.connect(self.open_library_project)
+        self.project_home.newRequested.connect(self.new_project)
+        self.project_home.importRequested.connect(self.import_project_file)
+        self.project_home.renameRequested.connect(self.rename_library_project)
+        self.project_home.trashRequested.connect(self.trash_library_project)
+        self.project_home.restoreRequested.connect(self.restore_library_project)
+        self.project_home.resumeRequested.connect(self.show_project_editor)
+
+    def show_project_editor(self):
+        self.project_home.thumbnails.stop()
+        self.screen_stack.setCurrentIndex(1)
+        self.refresh_workspace()
+
+    def show_project_library(self):
+        if self.busy():
+            return
+        try:
+            self.player.pause()
+            self.style_save_timer.stop()
+            self.save_edits()
+            self.project_home.resume.setVisible(bool(self.project))
+            self.screen_stack.setCurrentIndex(0)
+            self.project_home.refresh()
+            self.setWindowTitle('映字 · 工程库')
+        except (OSError, ValueError) as exc:
+            self.notify(f'无法保存当前工程：{exc}', error=True)
+
+    def new_project(self):
+        if self.busy():
+            return
+        dialog = NewProjectDialog(self.library.root, self)
+        if dialog.exec() != QDialog.Accepted:
+            return
+        try:
+            media = Path(dialog.media.text()) if dialog.media.text() else None
+            if media and (not media.is_file() or input_kind(media) != 'media'):
+                raise ValueError('请选择有效的视频或音频文件。')
+            self.style_save_timer.stop()
+            self.save_edits()
+            path = self.library.create(dialog.name.text(), media, options=self.current_options(), editor={'step': 0})
+            self.load_saved_project(path)
+        except (OSError, ValueError) as exc:
+            QMessageBox.warning(self, '无法新建工程', str(exc))
+
+    def open_library_project(self, path):
+        if not self.busy():
+            try:
+                self.load_saved_project(path)
+            except (OSError, ValueError, TypeError) as exc:
+                self.project_home.notice.setText(f'无法打开工程：{exc}')
+
+    def import_project_file(self):
+        if self.busy():
+            return
+        filename, _ = QFileDialog.getOpenFileName(self, '导入映字工程', str(self.library.root), '映字工程 (*.yingziproj)')
+        if filename:
+            self.open_input_file(Path(filename))
+
+    def rename_library_project(self, path):
+        if self.busy():
+            return
+        info = self.library.info(path)
+        name, accepted = QInputDialog.getText(self, '重命名工程', '工程名称', text=info.name)
+        if not accepted:
+            return
+        try:
+            self.style_save_timer.stop()
+            self.save_edits()
+            self.project_home.thumbnails.stop()
+            target = self.library.rename(path, name)
+            if self.project and self.project.resolve() == Path(path).resolve():
+                self.project = target
+                self.refresh_workspace()
+            self.project_home.refresh()
+            self.project_home.notice.setText(f'已重命名为「{name.strip()}」')
+        except (OSError, ValueError) as exc:
+            self.project_home.notice.setText(f'重命名失败：{exc}')
+
+    def trash_library_project(self, path):
+        if self.busy():
+            return
+        name = self.library.info(path).name
+        if QMessageBox.question(self, '移至回收站', f'将「{name}」移至工程回收站？\n字幕、缓存及工程目录内的文件会一起移入，可以随时恢复。', QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
+            return
+        active = self.project is not None and self.project.resolve() == Path(path).resolve()
+        suspended = False
+        try:
+            self.style_save_timer.stop()
+            self.save_edits()
+            self.project_home.thumbnails.stop()
+            # Release Windows media handles before moving a folder containing the source.
+            folder = self.library.folder(path)
+            if self.video and self.video.resolve().is_relative_to(folder):
+                self.waveform.clear()
+                self.player.stop()
+                self.player.setSource(QUrl())
+                suspended = True
+            self.library.trash(path)
+            if active:
+                self.project, self.video, self.cues = None, None, []
+                self.player.stop()
+                self.player.setSource(QUrl())
+                self._restore_position = None
+                self.history = EditHistory()
+                self.project_status = 'complete'
+                self.fill_table()
+                self.file_name.setText('新建字幕工程')
+                self.project_home.resume.hide()
+            self.project_home.refresh()
+            self.project_home.notice.setText(f'「{name}」已移至回收站，需要时可恢复。')
+        except (OSError, ValueError) as exc:
+            if suspended and self.project:
+                self.load_saved_project(self.project)
+            self.project_home.notice.setText(f'无法移除工程：{exc}')
+
+    def restore_library_project(self, path):
+        if self.busy():
+            return
+        try:
+            target = self.library.restore(path)
+            self.project_home.show_trash(False)
+            self.project_home.notice.setText(f'已恢复「{self.library.info(target).name}」')
+        except (OSError, ValueError) as exc:
+            self.project_home.notice.setText(f'无法恢复工程：{exc}')
 
     def go_to_step(self, index):
         if index != 1:
@@ -365,10 +500,13 @@ class Studio(QMainWindow):
         self.import_srt_button.setVisible(available)
         self.welcome_import.setEnabled(not busy)
         self.open_project_button.setEnabled(not busy)
-        self.save_project_button.setEnabled(bool(self.video) and not busy)
-        self.save_as_action.setEnabled(bool(self.video) and not busy)
+        self.save_project_button.setEnabled(bool(self.video or self.project) and not busy)
+        self.save_as_action.setEnabled(bool(self.video or self.project) and not busy)
         self.relink_action.setEnabled(bool(self.video) and not busy)
-        self.setWindowTitle(f'{self.project.name} · 映字' if self.project else '映字 · 双语字幕工作台')
+        self.setWindowTitle('映字 · 工程库' if self.screen_stack.currentIndex() == 0 else f'{self.project.name} · 映字' if self.project else '映字 · 双语字幕工作台')
+        if self.project:
+            self.file_name.setText(self.library.metadata(self.project).get('name') or self.project.stem)
+            self.file_name.setToolTip(f'工程：{self.project}\n媒体：{self.video or "尚未导入"}')
         self.save_project_button.setToolTip(('工程：' + str(self.project) + '\n自动保存 · Ctrl+S · 另存为 Ctrl+Shift+S') if self.project else '保存视频、字幕、样式与编码设置 · Ctrl+S')
         bilingual = bool(self.mode.currentData())
         self.translation_group.setVisible(bilingual)
@@ -567,6 +705,7 @@ class Studio(QMainWindow):
             return
         if input_kind(path) != 'media':
             raise ValueError('这不是支持的视频或音频文件。SRT 字幕请在载入视频后拖入。')
+        attach_to_draft = clear and self.project is not None and self.video is None and not self.cues and self.project_status == 'draft'
         self.flush_style_edits()
         if clear:
             self.save_edits()
@@ -590,7 +729,9 @@ class Studio(QMainWindow):
         self.track.blockSignals(False)
         if clear:
             self.export_settings = {}
-            self.cues, self.project = [], None
+            self.cues = []
+            if not attach_to_draft:
+                self.project = None
             self.history = EditHistory()
             self.project_status = 'draft'
             self.last_export_target = ''
@@ -599,7 +740,8 @@ class Studio(QMainWindow):
             self.subtitle_search.clear()
             self.quality_filter.setCurrentIndex(0)
             self.go_to_step(0)
-            self.create_project()
+            if not attach_to_draft:
+                self.create_project()
             self.save_edits()
         self.progress_bar.setValue(0)
         self.percent.setText('')
@@ -617,11 +759,10 @@ class Studio(QMainWindow):
         cues = read_srt(path)
         self.flush_style_edits()
         self.save_edits()
-        folder = OUTPUT / f'{self.video.stem[:40]}_导入字幕_{time.strftime("%Y%m%d_%H%M%S")}_{uuid.uuid4().hex[:4]}'
-        project = folder / f'{self.video.stem[:40]}.yingziproj'
         options = {**self.current_options(), 'export_mode': 'original'}
-        save_project(project, self.video, cues, options, status='edited', workspace=folder,
+        project = self.library.create(f'{self.video.stem[:80]} · 导入字幕', self.video, cues, options, status='edited',
                      editor={**self.editor_state(), 'step': 1, 'selected_rows': [], 'search': '', 'quality_filter': 0})
+        folder = project_workspace(project)
         self.history.remember(self.cues)
         self.cues, self.project, self.output_dir = cues, project, folder
         self.project_status = 'edited'
@@ -643,7 +784,7 @@ class Studio(QMainWindow):
         try:
             kind = input_kind(path)
             if kind == 'project':
-                self.load_saved_project(path)
+                self.load_saved_project(self.library.adopt(path))
             elif kind == 'srt':
                 self.import_srt(path)
             elif kind == 'media':
@@ -653,6 +794,7 @@ class Studio(QMainWindow):
         except Exception as exc:
             self.notify(f'无法打开拖入的文件：{exc}', error=True)
             return False
+        self.screen_stack.setCurrentIndex(1)
         return True
 
     def change_track(self, index):
@@ -861,6 +1003,10 @@ class Studio(QMainWindow):
         self.update_editor_actions()
 
     def focus_search(self):
+        if self.screen_stack.currentIndex() == 0:
+            self.project_home.search.setFocus()
+            self.project_home.search.selectAll()
+            return
         if self.cues and self.subtitle_search.isVisible():
             self.subtitle_search.setFocus()
             self.subtitle_search.selectAll()
@@ -966,12 +1112,11 @@ class Studio(QMainWindow):
                 'quality_filter': self.quality_filter.currentIndex(), 'last_export_target': self.last_export_target}
 
     def create_project(self):
-        folder = OUTPUT / f'{self.video.stem[:40]}_工程_{time.strftime("%Y%m%d_%H%M%S")}_{uuid.uuid4().hex[:4]}'
-        self.output_dir = folder
-        self.project = folder / f'{self.video.stem[:40]}.yingziproj'
+        self.project = self.library.create(self.video.stem[:100], self.video, options=self.current_options())
+        self.output_dir = project_workspace(self.project)
 
     def save_current_project(self):
-        if self.busy() or not self.video:
+        if self.busy() or not (self.video or self.project):
             return
         try:
             if not self.project:
@@ -984,27 +1129,17 @@ class Studio(QMainWindow):
             QMessageBox.warning(self, '无法保存工程', str(exc))
 
     def save_project_as(self):
-        if self.busy() or not self.video:
+        if self.busy() or not self.project:
             return
-        default_path = (self.project if self.project and self.project.suffix.lower() == '.yingziproj'
-                        else (self.project.parent if self.project else OUTPUT) / f'{self.video.stem}.yingziproj')
-        filename, _ = QFileDialog.getSaveFileName(self, '另存映字工程',
-            str(default_path),
-            '映字工程 (*.yingziproj)')
-        if not filename:
+        name, accepted = QInputDialog.getText(self, '另存工程副本', '副本名称', text=f'{self.library.info(self.project).name} · 副本')
+        if not accepted:
             return
-        target = Path(filename).resolve()
-        if not target.name.lower().endswith('.yingziproj'):
-            target = target.with_name(target.name + '.yingziproj')
         try:
-            if target == self.video.resolve() or (target.exists() and self.video.exists() and target.samefile(self.video)):
-                raise ValueError('工程文件不能覆盖原媒体。')
             self.style_save_timer.stop()
             self.save_edits()
-            status = self.project_status if self.project_status in ('recognizing', 'aligning', 'draft') else 'edited'
-            save_project(target, self.video, self.cues, self.current_options(), status=status,
-                         workspace=self.output_dir, editor=self.editor_state())
+            target = self.library.clone(self.project, name)
             self.project = target
+            self.output_dir = project_workspace(target)
             self.refresh_workspace()
             self.notify(f'工程已另存：{target} · 后续编辑自动保存到此文件')
         except (OSError, ValueError) as exc:
@@ -1049,7 +1184,7 @@ class Studio(QMainWindow):
         job = {**self.current_options(), 'video': str(self.video), 'output': str(self.output_dir)}
         # A fresh generation gets a fresh cache, while retaining the chosen project file.
         if (self.output_dir / '.pipeline').exists():
-            self.output_dir = OUTPUT / f'{self.video.stem[:40]}_{time.strftime("%Y%m%d_%H%M%S")}_{uuid.uuid4().hex[:4]}'
+            self.output_dir = self.project.parent / 'work' / f'run_{uuid.uuid4().hex[:8]}'
             job['output'] = str(self.output_dir)
         self.cues = []
         self.project_status = 'recognizing'
@@ -1233,14 +1368,7 @@ class Studio(QMainWindow):
             self.recover_checkpoint()
 
     def open_project(self):
-        if self.busy():
-            return
-        filename, _ = QFileDialog.getOpenFileName(self, '打开映字工程', str(self.project.parent if self.project else OUTPUT), '映字工程 (*.yingziproj)')
-        if filename:
-            try:
-                self.load_saved_project(filename)
-            except Exception as exc:
-                QMessageBox.warning(self, '无法打开工程', str(exc))
+        self.show_project_library()
 
     def load_saved_project(self, filename):
         if self.busy():
@@ -1270,17 +1398,17 @@ class Studio(QMainWindow):
             self._loading_project = False
 
     def restore_project(self, data, cues, filename, options, editor, style, characters, position, step, quality_filter, rows):
-        path = Path(data['video'])
-        if path.is_file():
+        path = Path(data['video']) if data['video'] else None
+        if path and path.is_file():
             self.load_video(path, clear=False)
         else:
             self.player.stop()
             self.player.setSource(QUrl())
             self.video = path
-            self.file_name.setText('原视频已移动，可继续编辑字幕')
-            self.file_name.setToolTip(str(path))
+            self.file_name.setText('原视频已移动，可继续编辑字幕' if path else Path(filename).stem)
+            self.file_name.setToolTip(str(path) if path else str(filename))
             self.track.clear()
-            self.track.addItem('原媒体缺失', options.get('track', 0))
+            self.track.addItem('原媒体缺失' if path else '默认音轨', options.get('track', 0))
         self.project, self.cues = Path(filename).resolve(), cues
         self.project_status = data.get('status', 'complete')
         self.output_dir = project_workspace(self.project, data)
@@ -1320,11 +1448,13 @@ class Studio(QMainWindow):
                 self.table.selectionModel().select(self.table.model().index(row, 0), QItemSelectionModel.Select | QItemSelectionModel.Rows)
         self.last_export_target = str(editor.get('last_export_target', ''))
         self._restore_position = position
-        if path.is_file():
+        if path and path.is_file():
             self.restore_playback_position(self.player.mediaStatus())
         self.position_changed(position)
         self.refresh_models()
-        self.notify(f'已打开工程 · {len(cues)} 条字幕' + (' · 原媒体缺失，请在「更多」中重新关联' if not path.is_file() else ' · 可以继续编辑'))
+        self.screen_stack.setCurrentIndex(1)
+        self.refresh_workspace()
+        self.notify(f'已打开工程 · {len(cues)} 条字幕' + (' · 可以导入视频或音频' if path is None else ' · 原媒体缺失，请在「更多」中重新关联' if not path.is_file() else ' · 可以继续编辑'))
 
     def export(self):
         if not self.cues:
@@ -1338,7 +1468,7 @@ class Studio(QMainWindow):
             QMessageBox.information(self, '译文尚未完成', '部分日语或英语字幕没有中文译文，请点击“继续翻译”，或选择“原文字幕”导出。')
             return
         stem = self.video.stem if self.video else 'subtitles'
-        filename, selection = QFileDialog.getSaveFileName(self, '导出字幕', str(self.output_dir / f'{stem}.{mode}.srt'), 'SubRip 字幕 (*.srt);;WebVTT 字幕 (*.vtt)')
+        filename, selection = QFileDialog.getSaveFileName(self, '导出字幕', str(self.export_folder() / f'{stem}.{mode}.srt'), 'SubRip 字幕 (*.srt);;WebVTT 字幕 (*.vtt)')
         if filename:
             try:
                 target = Path(filename)
@@ -1372,7 +1502,7 @@ class Studio(QMainWindow):
             return
         self.export_settings = dialog.settings()
         self.save_edits()
-        filename, _ = QFileDialog.getSaveFileName(self, '导出字幕视频', self.last_export_target or str(self.output_dir / f'{self.video.stem}.字幕版.mp4'), 'MP4 视频 (*.mp4)')
+        filename, _ = QFileDialog.getSaveFileName(self, '导出字幕视频', self.last_export_target or str(self.export_folder() / f'{self.video.stem}.字幕版.mp4'), 'MP4 视频 (*.mp4)')
         if not filename:
             return
         target = Path(filename)
@@ -1446,9 +1576,25 @@ class Studio(QMainWindow):
             self.export_work.cleanup()
             self.export_work = None
 
+    def export_folder(self):
+        folder = self.library.folder(self.project) / 'exports' if self.project and self.library.contains(self.project) else self.output_dir
+        folder.mkdir(parents=True, exist_ok=True)
+        return folder
+
     def open_output(self):
         from PySide6.QtGui import QDesktopServices
+        self.output_dir.mkdir(parents=True, exist_ok=True)
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.output_dir)))
+
+    def open_exports(self):
+        from PySide6.QtGui import QDesktopServices
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.export_folder())))
+
+    def open_project_folder(self):
+        from PySide6.QtGui import QDesktopServices
+        folder = self.library.folder(self.project) if self.project and self.library.contains(self.project) else self.library.root
+        folder.mkdir(parents=True, exist_ok=True)
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
 
     def show_logs(self):
         dialog = QDialog(self)
@@ -1541,6 +1687,7 @@ class Studio(QMainWindow):
             event.ignore()
             return
         self._closed = True
+        self.project_home.thumbnails.stop()
         self.model_timer.stop()
         self.player.stop()
         event.accept()
@@ -1569,6 +1716,7 @@ def main():
         QMessageBox.information(None, '映字已启动', '映字已经在运行，请切换到现有窗口。')
         return 0
     window = Studio()
+    window.show_project_library()
     QLocalServer.removeServer(server_name)
     server = QLocalServer(window)
     server.setSocketOptions(QLocalServer.UserAccessOption)

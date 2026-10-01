@@ -8,6 +8,10 @@ QMainWindow, QDialog, #workspace { background: #F5F4F2; }
 QLabel { background: transparent; }
 #appHeader { background: white; border-bottom: 1px solid #E8E5E1; }
 #brand { font-size: 23px; font-weight: 700; color: #24211F; }
+#projectHome { background: #F5F4F2; }
+#projectSidebar { background: white; border-right: 1px solid #E8E5E1; }
+#homeTitle { font-size: 30px; font-weight: 700; color: #24211F; }
+#projectCards { background: transparent; border: none; outline: none; }
 #brandMark { background: #FF5522; color: #39170D; border-radius: 9px; font-size: 23px; font-weight: 700; }
 #eyebrow { color: #9B8D83; font-size: 10px; font-weight: 600; }
 #fileName { font-size: 13px; font-weight: 600; }

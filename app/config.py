@@ -6,6 +6,7 @@ ROOT = Path(__file__).resolve().parent.parent
 MODELS = ROOT / 'models'
 CACHE = ROOT / '.cache'
 OUTPUT = ROOT / 'output'
+PROJECTS = ROOT / 'projects'
 RUNTIME = ROOT / 'runtime'
 LOGS = ROOT / 'logs'
 ASR_PATH = MODELS / 'Qwen3-ASR-1.7B'

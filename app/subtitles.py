@@ -117,8 +117,8 @@ def resolve_project_path(value, relative, project):
 def save_project(path, video, cues, options=None, status='complete', *, workspace=None, editor=None):
     path = require_project_path(path)
     validate(cues)
-    data = {'version': 1, 'video': str(video), 'options': options or {}, 'status': status, 'cues': [dataclasses.asdict(cue) for cue in cues]}
-    data['video_relative'] = relative_path(video, Path(path).parent)
+    data = {'version': 1, 'video': str(video) if video else '', 'options': options or {}, 'status': status, 'cues': [dataclasses.asdict(cue) for cue in cues]}
+    data['video_relative'] = relative_path(video, Path(path).parent) if video else None
     if workspace is not None:
         data['workspace'] = str(Path(workspace).resolve())
         data['workspace_relative'] = relative_path(workspace, Path(path).parent)
@@ -141,7 +141,8 @@ def require_project_path(path):
 def _load_project_data(path):
     data = json.loads(Path(path).read_text(encoding='utf-8-sig'))
     if (not isinstance(data, dict) or data.get('version') != 1 or not isinstance(data.get('cues'), list)
-            or not isinstance(data.get('video'), str) or not data['video'].strip()
+            or not isinstance(data.get('video'), str)
+            or (not data['video'].strip() and (data.get('status') != 'draft' or data['cues']))
             or not isinstance(data.get('options', {}), dict)
             or not isinstance(data.get('editor', {}), dict)):
         raise ValueError('这不是受支持的映字字幕工程。')
@@ -151,7 +152,8 @@ def _load_project_data(path):
                for key in ('text', 'translation', 'language', 'translation_error')):
             raise ValueError('工程中的字幕文字或语言记录无效。')
         validate(cues)
-        data['video'] = str(resolve_project_path(data['video'], data.get('video_relative'), path))
+        if data['video']:
+            data['video'] = str(resolve_project_path(data['video'], data.get('video_relative'), path))
         if data.get('workspace'):
             data['workspace'] = str(resolve_project_path(data['workspace'], data.get('workspace_relative'), path))
     except (TypeError, AttributeError) as exc:
