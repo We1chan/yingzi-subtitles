@@ -31,7 +31,7 @@ def test_gpu_failure_falls_back_to_cpu_without_replacing_target_early(applicatio
         if encoder == 'h264_nvenc':
             return 1
         return original(command, *args)
-    monkeypatch.setattr(video_export, 'select_encoder', lambda choice: 'h264_nvenc')
+    monkeypatch.setattr(video_export, 'select_encoder', lambda choice, codec: 'h264_nvenc')
     monkeypatch.setattr(video_export, 'run_encoder', encode)
     encode_video({'video': str(video), 'target': str(target), 'encoder': 'auto', 'mode': 'original',
                   'cues': [dataclasses.asdict(Cue(.1, .7, 'Test'))]}, tmp_path)
@@ -97,7 +97,8 @@ def test_encoded_pixels_timing_audio_and_tail(application, tmp_path):
     cues = [Cue(.12, .48, '<Hello> {\\N}', '你好', 'English'), Cue(1.04, 1.48, 'Second', '第二句', 'English')]
     style = CaptionStyle(font_size=65, translation_size=55, x=70, y=65, background_opacity=75, rotation=8)
     job = {'video': str(video), 'target': str(target), 'mode': 'bilingual', 'all_audio': True,
-           'cues': [dataclasses.asdict(cue) for cue in cues], 'subtitle_style': style.to_dict(), 'preset': 'ultrafast'}
+           'cues': [dataclasses.asdict(cue) for cue in cues], 'subtitle_style': style.to_dict(),
+           'preset': 'ultrafast', 'crf': 18, 'encoder': 'cpu'}
     progress = []
     encode_video(job, tmp_path, lambda *args: progress.append(args))
     assert progress[-1][0] == 100
@@ -148,7 +149,7 @@ def test_imported_multiline_srt_keeps_video_and_matches_preview_in_encoded_outpu
     assert np.array_equal(rgb(window.preview.caption.pixmap().toImage()), rgb(expected_tile))
     encode_video({'video': str(video), 'target': str(target), 'mode': window.export_mode.currentData(),
                   'cues': [dataclasses.asdict(cue) for cue in window.cues], 'subtitle_style': style.to_dict(),
-                  'preset': 'ultrafast'}, tmp_path)
+                  'preset': 'ultrafast', 'crf': 18, 'encoder': 'cpu'}, tmp_path)
     reader = imageio_ffmpeg.read_frames(str(target))
     next(reader)
     frames = [np.frombuffer(frame, np.uint8).reshape(180, 320, 3) for frame in reader]

@@ -11,4 +11,5 @@ $asrShortcut.WorkingDirectory = $asrRoot
 $asrShortcut.IconLocation = (Join-Path $asrRoot 'runtime\yingzi.ico') + ',0'
 $asrShortcut.Description = '本地视频识别、日中双语字幕与时间轴校对'
 $asrShortcut.Save()
+& (Join-Path $PSScriptRoot 'register_project.ps1')
 Write-Output (Join-Path $asrDesktop '映字 - 双语字幕.lnk')

@@ -55,7 +55,10 @@ def process(job):
     job = {**job, **{key: str(value) for key, value in paths.items()}}
     video, out = Path(job['video']), Path(job['output'])
     out.mkdir(parents=True, exist_ok=True)
-    project = out / 'subtitles.yingzi.json'
+    project = Path(job.get('project_path') or job.get('resume_project') or out / 'subtitles.yingzi.json')
+    editor = job.get('editor_state', (data or {}).get('editor'))
+    job['project_path'] = str(project)
+    job['editor_state'] = editor
     bilingual = job.get('bilingual', True)
     device = job.get('device', 'auto')
     start_clock = time.monotonic()
@@ -69,10 +72,12 @@ def process(job):
         # Resegmentation is local; translation runs only when the user requests it.
         bilingual = False
     job.pop('resume_project', None)
+    job.pop('project_path', None)
+    job.pop('editor_state', None)
     selected = job.pop('selected_ids', None)
     validate(cues)
     atomic_write(out / 'original.srt', render(cues, 'original'))
-    save_project(project, video, cues, job, status='translating' if bilingual else 'complete')
+    save_project(project, video, cues, job, status='translating' if bilingual else 'complete', workspace=out, editor=editor)
     event('checkpoint', project=str(project))
     pending = [i for i, cue in enumerate(cues) if (needs_translation(cue) if selected is None else
                i + 1 in selected and cue.language in ('Japanese', 'English'))]
@@ -111,7 +116,7 @@ def process(job):
                     cues[cue_id - 1].translation_error = error
                     updates.append({'id': cue_id, 'translation': cues[cue_id - 1].translation, 'error': error})
                     failed += 1
-                save_project(project, video, cues, job, status='translating')
+                save_project(project, video, cues, job, status='translating', workspace=out, editor=editor)
                 done = completed + failed
                 event('translation_update', updates=updates, completed=completed, failed=failed,
                       total=len(pending), **metrics.snapshot(done, len(pending) - done))
@@ -128,7 +133,7 @@ def process(job):
                 context = '\n'.join(cue.text for cue in cues[max(0, indexes[0] - 3):indexes[0]])
                 checkpoint(translator.translate(rows, context))
     remaining = sum(needs_translation(cue) for cue in cues) if bilingual else 0
-    save_project(project, video, cues, job, status='translation_partial' if remaining else 'complete')
+    save_project(project, video, cues, job, status='translation_partial' if remaining else 'complete', workspace=out, editor=editor)
     for mode in ('original', 'translated', 'bilingual'):
         atomic_write(out / f'{mode}.srt', render(cues, mode))
     atomic_write(out / 'bilingual.vtt', render(cues, 'bilingual', 'vtt'))

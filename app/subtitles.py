@@ -1,6 +1,7 @@
 import dataclasses
 import json
 import math
+import os
 import re
 import unicodedata
 from pathlib import Path
@@ -95,18 +96,61 @@ def atomic_write(path, text):
     temporary.replace(path)
 
 
-def save_project(path, video, cues, options=None, status='complete'):
+def relative_path(path, folder):
+    try:
+        return os.path.relpath(Path(path).resolve(), Path(folder).resolve())
+    except ValueError:
+        return None
+
+
+def resolve_project_path(value, relative, project):
+    path = Path(value)
+    if not path.is_absolute():
+        path = Path(project).resolve().parent / path
+    if relative:
+        candidate = Path(project).resolve().parent / relative
+        if candidate.exists():
+            return candidate.resolve()
+    return value if Path(value).is_absolute() else path
+
+
+def save_project(path, video, cues, options=None, status='complete', *, workspace=None, editor=None):
+    validate(cues)
     data = {'version': 1, 'video': str(video), 'options': options or {}, 'status': status, 'cues': [dataclasses.asdict(cue) for cue in cues]}
+    data['video_relative'] = relative_path(video, Path(path).parent)
+    if workspace is not None:
+        data['workspace'] = str(Path(workspace).resolve())
+        data['workspace_relative'] = relative_path(workspace, Path(path).parent)
+    if editor is not None:
+        data['editor'] = editor
     atomic_write(path, json.dumps(data, ensure_ascii=False, indent=2))
 
 
 def load_project(path):
     data = json.loads(Path(path).read_text(encoding='utf-8-sig'))
-    if data.get('version') != 1 or not isinstance(data.get('cues'), list):
+    if (not isinstance(data, dict) or data.get('version') != 1 or not isinstance(data.get('cues'), list)
+            or not isinstance(data.get('video'), str) or not data['video'].strip()
+            or not isinstance(data.get('options', {}), dict)
+            or not isinstance(data.get('editor', {}), dict)):
         raise ValueError('这不是受支持的映字字幕工程。')
-    cues = [Cue(**item) for item in data['cues']]
-    validate(cues)
+    try:
+        cues = [Cue(**item) for item in data['cues']]
+        if any(not isinstance(getattr(cue, key), str) for cue in cues
+               for key in ('text', 'translation', 'language', 'translation_error')):
+            raise ValueError('工程中的字幕文字或语言记录无效。')
+        validate(cues)
+        data['video'] = str(resolve_project_path(data['video'], data.get('video_relative'), path))
+        if data.get('workspace'):
+            data['workspace'] = str(resolve_project_path(data['workspace'], data.get('workspace_relative'), path))
+    except (TypeError, AttributeError) as exc:
+        raise ValueError('工程中的字幕或媒体路径无效。') from exc
     return data, cues
+
+
+def project_workspace(path, data=None):
+    if data is None:
+        data, _ = load_project(path)
+    return Path(data.get('workspace') or Path(path).resolve().parent)
 
 
 def normalized_chars(text):

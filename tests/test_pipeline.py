@@ -8,7 +8,8 @@ from app.subtitles import load_project, save_project
 
 
 @pytest.mark.parametrize('failure_stage', ['extraction', 'recognition', 'alignment'])
-def test_stage_resume_and_resegment_reuse_durable_results(tmp_path, monkeypatch, failure_stage):
+@pytest.mark.parametrize('named_project', [False, True])
+def test_stage_resume_and_resegment_reuse_durable_results(tmp_path, monkeypatch, failure_stage, named_project):
     video = tmp_path / 'video.mp4'
     video.touch()
     calls = {'recognition': [], 'alignment': [], 'extract': 0}
@@ -51,9 +52,11 @@ def test_stage_resume_and_resegment_reuse_durable_results(tmp_path, monkeypatch,
     monkeypatch.setattr(worker, 'event', lambda *args, **kwargs: None)
     job = {'video': str(video), 'output': str(tmp_path), 'language': 'English', 'bilingual': False,
            'max_chars': 16, 'segmentation_mode': 'fixed'}
+    project = tmp_path / ('工程/保存的工程.yingziproj' if named_project else 'subtitles.yingzi.json')
+    if named_project:
+        job['project_path'] = str(project)
     with pytest.raises(RuntimeError, match='interruption'):
         worker.process(job)
-    project = tmp_path / 'subtitles.yingzi.json'
     assert load_project(project)[0]['status'] == ('aligning' if failure_stage == 'alignment' else 'recognizing')
     if failure_stage == 'extraction':
         assert not (tmp_path / '.pipeline/audio.wav').exists()

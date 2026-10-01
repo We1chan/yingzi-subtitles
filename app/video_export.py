@@ -11,6 +11,7 @@ import threading
 from .media import CREATE_NO_WINDOW, ffmpeg
 from .subtitles import Cue, validate, subtitle_text, needs_translation, clean_line
 from .encoders import select_encoder, encoder_arguments
+from .export_settings import normalize_settings, probe_media_info, video_bitrate, audio_arguments
 
 
 class ExportCancelled(Exception):
@@ -78,6 +79,7 @@ def encode_video(job, work, progress=lambda *args: None, cancelled=lambda: False
         raise ValueError('请另选导出文件名，不能覆盖原视频。')
     if target.suffix.lower() != '.mp4':
         raise ValueError('当前视频导出格式为 MP4。')
+    settings = normalize_settings(job)
     cues = [Cue(**row) for row in job['cues']]
     validate(cues)
     if not cues:
@@ -89,36 +91,36 @@ def encode_video(job, work, progress=lambda *args: None, cancelled=lambda: False
         raise ValueError('译文尚未完成，请继续翻译或选择原文字幕。')
     progress(1, '读取视频分辨率与时长')
     metadata, filters = probe_video(video, job.get('resolution', 'original'))
+    info = probe_media_info(video)
+    bitrate = video_bitrate(settings, info)
+    audio = audio_arguments(settings, info)
     if cancelled():
         raise ExportCancelled()
     style = CaptionStyle.from_dict(job.get('subtitle_style'))
     manifest = build_overlays(cues, mode, style, metadata['size'], work, progress, cancelled)
     partial = work / 'encoded.mp4'
-    crf = int(job.get('crf', 18))
-    preset = job.get('preset', 'fast')
-    if crf not in (18, 23, 28) or preset not in ('fast', 'medium', 'slow', 'ultrafast'):
-        raise ValueError('不支持的视频质量或速度设置。')
-    audio_map = '0:a?' if job.get('all_audio', True) else f"0:a:{max(0, int(job.get('track', 0)))}?"
-    encoder = select_encoder(job.get('encoder', 'cpu'))
+    encoder = select_encoder(settings['encoder'], settings['codec'])
     log_path = work / 'ffmpeg.log'
     log_path.write_text('', encoding='utf-8')
     for attempt in range(2):
         if cancelled():
             raise ExportCancelled()
-        progress(26, '使用 NVIDIA 显卡编码' if encoder == 'h264_nvenc' else '使用 CPU 编码')
+        device = 'NVIDIA 显卡' if encoder.endswith('_nvenc') else 'CPU'
+        rate = f'{bitrate} kbps' if bitrate is not None else f"恒定画质 {settings['crf']}"
+        progress(26, f"使用 {device} 编码 · {settings['codec'].upper()} · {rate}")
         command = [ffmpeg(), '-hide_banner', '-nostdin', '-y', '-i', str(video),
                    '-f', 'concat', '-safe', '0', '-i', str(manifest),
                    '-filter_complex', f'[0:v:0]{filters}[base];[base][1:v:0]overlay=eof_action=repeat:repeatlast=1:format=auto,format=yuv420p,sidedata=mode=delete:type=DISPLAYMATRIX[v]',
-                   '-map', '[v]', '-map', audio_map, '-map_metadata', '0', '-map_chapters', '0',
-                   *encoder_arguments(encoder, crf, preset), '-fps_mode', 'vfr',
-                   '-c:a', 'aac', '-b:a', '192k', '-metadata:s:v:0', 'rotate=0',
+                   '-map', '[v]', *audio, '-map_metadata', '0', '-map_chapters', '0',
+                   *encoder_arguments(encoder, settings['crf'], settings['preset'], bitrate), '-fps_mode', 'vfr',
+                   '-metadata:s:v:0', 'rotate=0',
                    '-movflags', '+faststart', '-progress', 'pipe:1', '-nostats', str(partial)]
         code = run_encoder(command, log_path, metadata['duration'], progress, cancelled)
         if code == 0:
             break
-        if encoder == 'h264_nvenc':
+        if encoder.endswith('_nvenc'):
             progress(26, '显卡编码失败，正在回退 CPU；原视频与目标文件保持完整')
-            encoder = 'libx264'
+            encoder = 'libx265' if settings['codec'] == 'hevc' else 'libx264'
         else:
             raise RuntimeError('视频编码失败：\n' + log_path.read_text(encoding='utf-8', errors='replace')[-2500:])
     if not partial.exists() or not partial.stat().st_size:

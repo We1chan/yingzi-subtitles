@@ -15,7 +15,7 @@ TIME_RANGE = re.compile(r'\s*(\d+:[0-5]\d:[0-5]\d[,.]\d{3})\s*-->\s*(\d+:[0-5]\d
 
 def input_kind(path):
     path = Path(path)
-    if path.name.lower().endswith('.yingzi.json'):
+    if path.name.lower().endswith(('.yingzi.json', '.yingziproj')):
         return 'project'
     if path.suffix.lower() == '.srt':
         return 'srt'

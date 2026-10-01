@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
-from .subtitles import aligned_cues, atomic_write, save_project, validate
+from .subtitles import aligned_cues, atomic_write, save_project, validate, project_workspace
 
 
 def fingerprint(video, job, paths):
@@ -15,7 +15,7 @@ def fingerprint(video, job, paths):
 
 def cache_ready(project, complete=False):
     try:
-        data = json.loads((Path(project).parent / '.pipeline' / 'state.json').read_text(encoding='utf-8'))
+        data = json.loads((project_workspace(project) / '.pipeline' / 'state.json').read_text(encoding='utf-8'))
         return bool(data.get('fingerprint')) and (not complete or data.get('aligned_complete') is True)
     except (OSError, ValueError):
         return False
@@ -43,8 +43,10 @@ def run_pipeline(job, paths, out, previous_cues, hooks):
         atomic_write(state_path, json.dumps(state, ensure_ascii=False))
 
     def checkpoint(cues, status):
-        save_project(out / 'subtitles.yingzi.json', video, cues, job, status=status)
-        h.event('checkpoint', project=str(out / 'subtitles.yingzi.json'), status=status)
+        project = Path(job.get('project_path') or out / 'subtitles.yingzi.json')
+        options = {key: value for key, value in job.items() if key not in ('project_path', 'editor_state', 'resume_project')}
+        save_project(project, video, cues, options, status=status, workspace=out, editor=job.get('editor_state'))
+        h.event('checkpoint', project=str(project), status=status)
 
     if job.get('resegment_only') and not state.get('aligned_complete'):
         raise ValueError('时间轴缓存尚未完成，请先继续处理。')
