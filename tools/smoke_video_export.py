@@ -14,12 +14,12 @@ from app.gui import Studio, STYLE, initialize_fonts
 from app.subtitles import load_project, save_project
 
 parser = argparse.ArgumentParser()
-parser.add_argument('project', nargs='?', default=str(ROOT / 'output/验证_日中双语/subtitles.yingzi.json'))
+parser.add_argument('project', nargs='?', default=str(ROOT / 'output/验证_日中双语/subtitles.yingziproj'))
 args = parser.parse_args()
 data, cues = load_project(args.project)
 out = ROOT / 'output/验证_字幕视频导出'
 out.mkdir(parents=True, exist_ok=True)
-project = out / 'subtitles.yingzi.json'
+project = out / 'subtitles.yingziproj'
 style = CaptionStyle(font_size=29, translation_size=33, background_opacity=40, padding=12)
 save_project(project, data['video'], cues, {**data.get('options', {}), 'subtitle_style': style.to_dict()})
 application = QApplication([])

@@ -59,7 +59,7 @@ def test_reject_invalid_or_overlapping_subtitles():
 
 
 def test_project_roundtrip_unicode_and_timing(tmp_path):
-    path = tmp_path / '映字.yingzi.json'
+    path = tmp_path / '映字.yingziproj'
     cues = [Cue(2.3, 5, '日本語', '日语', 'Japanese')]
     save_project(path, 'D:/视频/日本語.mp4', cues, {'bilingual': True})
     data, loaded = load_project(path)

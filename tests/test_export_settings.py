@@ -188,7 +188,7 @@ def test_dialog_dynamic_controls_estimates_and_project_restore(application, tmp_
     assert dialog.save_button.isEnabled() and not controls['sample_rate'].isEnabled()
     controls['codec'].setCurrentIndex(controls['codec'].findData('hevc'))
     settings = dialog.settings()
-    project = tmp_path / 'saved.yingzi.json'
+    project = tmp_path / 'saved.yingziproj'
     save_project(project, video, [Cue(0, 1, 'Text')], {'video_export': settings})
     restored = ExportDialog(video, '原文字幕', load_project(project)[0]['options']['video_export'])
     restored.stop_probe()

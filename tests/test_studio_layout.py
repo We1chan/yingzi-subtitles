@@ -62,7 +62,7 @@ def test_empty_workspace_navigation_and_disclosure(app, window, monkeypatch):
 
 
 def test_search_combines_with_quality_and_preserves_underlying_row_ids(window, tmp_path, monkeypatch):
-    project = tmp_path / 'subtitles.yingzi.json'
+    project = tmp_path / 'subtitles.yingziproj'
     cues = [Cue(0, 2, 'Hello WORLD', '你好世界', 'English'),
             Cue(3, 5, 'Another world', language='English'),
             Cue(6, 8, 'Last line', '最后一行', 'English')]
@@ -88,7 +88,7 @@ def test_search_combines_with_quality_and_preserves_underlying_row_ids(window, t
 
 
 def test_contextual_actions_require_compatible_selection_and_lock_while_busy(window, tmp_path):
-    project = tmp_path / 'subtitles.yingzi.json'
+    project = tmp_path / 'subtitles.yingziproj'
     save_project(project, tmp_path / 'missing.mp4', [Cue(i * 2, i * 2 + 1, str(i)) for i in range(3)])
     window.load_saved_project(project)
     window.table.clearSelection()
@@ -161,7 +161,7 @@ def test_landing_page_gives_the_drop_zone_the_whole_column_and_explains_disabled
 
 
 def test_review_rows_are_compact_and_problem_statuses_stand_out(app, window, tmp_path):
-    project = tmp_path / 'subtitles.yingzi.json'
+    project = tmp_path / 'subtitles.yingziproj'
     cues = [Cue(0, 2, 'Fine.', '好。', 'English'), Cue(3, 5, 'Pending.', language='English'),
             Cue(6, 8, 'Failed.', language='English', translation_error='timeout'), Cue(9, 9.3, 'Short.', '短。', 'English')]
     save_project(project, tmp_path / 'missing.mp4', cues)
@@ -179,7 +179,7 @@ def test_review_rows_are_compact_and_problem_statuses_stand_out(app, window, tmp
 
 
 def test_match_count_shows_only_while_filtering(window, tmp_path):
-    project = tmp_path / 'subtitles.yingzi.json'
+    project = tmp_path / 'subtitles.yingziproj'
     save_project(project, tmp_path / 'missing.mp4', [Cue(0, 1, 'One', '一', 'English'), Cue(2, 3, 'Two', '二', 'English')])
     window.load_saved_project(project)
     assert window.match_count.isHidden()
@@ -190,7 +190,7 @@ def test_match_count_shows_only_while_filtering(window, tmp_path):
 
 
 def test_keyboard_shortcuts_and_table_menu_mirror_toolbar(app, window, tmp_path, monkeypatch):
-    project = tmp_path / 'subtitles.yingzi.json'
+    project = tmp_path / 'subtitles.yingziproj'
     save_project(project, tmp_path / 'missing.mp4', [Cue(i * 2, i * 2 + 1, f'Line {i}', '译文', 'English') for i in range(3)])
     window.show()
     window.activateWindow()

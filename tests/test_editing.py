@@ -19,7 +19,7 @@ def application():
 
 
 def test_merge_split_edit_history_and_persistence(application, tmp_path):
-    project = tmp_path / 'project.yingzi.json'
+    project = tmp_path / 'project.yingziproj'
     cues = [Cue(1, 2, 'Hello', '你好', 'English'), Cue(2, 4, 'world.', '世界。', 'English')]
     save_project(project, tmp_path / 'missing.mp4', cues)
     window = Studio()
@@ -46,7 +46,7 @@ def test_merge_split_edit_history_and_persistence(application, tmp_path):
 
 
 def test_quality_filter_and_selected_retranslation_do_not_change_other_rows(application, tmp_path, monkeypatch):
-    project = tmp_path / 'project.yingzi.json'
+    project = tmp_path / 'project.yingziproj'
     cues = [Cue(0, 1, 'Hello', '你好', 'English'), Cue(1, 1.3, 'Different long sentence', '你好', 'English'),
             Cue(2, 4, 'Retry', language='English', translation_error='需要重试')]
     save_project(project, tmp_path / 'missing.mp4', cues)

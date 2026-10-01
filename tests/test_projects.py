@@ -106,7 +106,7 @@ def test_switching_media_flushes_pending_options_before_new_draft(window, tmp_pa
 
 
 def test_save_as_preserves_workspace_and_worker_updates_named_file(window, tmp_path, monkeypatch):
-    original = tmp_path / 'old.yingzi.json'
+    original = tmp_path / 'old.yingziproj'
     workspace = tmp_path / '缓存'
     workspace.mkdir()
     save_project(original, tmp_path / 'missing.mp4', [Cue(0, 2, '字幕')], workspace=workspace)
@@ -123,7 +123,7 @@ def test_save_as_preserves_workspace_and_worker_updates_named_file(window, tmp_p
     worker.process({'video': str(window.video), 'output': str(workspace), 'resume_project': str(target), 'bilingual': False})
     assert load_project(target)[1][0].text == '继续校对'
     assert load_project(target)[0]['editor']['step'] == 1
-    assert not (workspace / 'subtitles.yingzi.json').exists()
+    assert not (workspace / 'subtitles.yingziproj').exists()
     assert original.read_bytes() == original_bytes
 
 

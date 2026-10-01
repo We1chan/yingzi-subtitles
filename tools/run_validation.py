@@ -53,7 +53,7 @@ def main():
         with (ROOT / f'logs/{tag}-events.jsonl').open('wb', buffering=0) as events, (ROOT / f'logs/{tag}-error.log').open('wb', buffering=0) as errors:
             print(f'Starting actual {name} model pipeline', flush=True)
             subprocess.run([sys.executable, '-u', '-m', 'app.worker', '--job', str(path)], cwd=ROOT, stdout=events, stderr=errors, check=True)
-        data, cues = load_project(out / 'subtitles.yingzi.json')
+        data, cues = load_project(out / 'subtitles.yingziproj')
         validate(cues)
         assert data['status'] == 'complete'
         assert len(cues) > 0

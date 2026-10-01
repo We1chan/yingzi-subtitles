@@ -12,7 +12,7 @@ from pathlib import Path
 
 from .config import CACHE, ROOT, model_paths, model_issue, readiness, asr_backend, asr_language_issue, extra_runtime_ready
 from .media import extract_audio, read_span, speech_chunks
-from .subtitles import atomic_write, load_project, render, save_project, validate, needs_translation
+from .subtitles import atomic_write, load_project, render, save_project, validate, needs_translation, require_project_path
 from .job_metrics import RequestMetrics
 
 EVENT_STREAM = sys.stdout
@@ -55,7 +55,7 @@ def process(job):
     job = {**job, **{key: str(value) for key, value in paths.items()}}
     video, out = Path(job['video']), Path(job['output'])
     out.mkdir(parents=True, exist_ok=True)
-    project = Path(job.get('project_path') or job.get('resume_project') or out / 'subtitles.yingzi.json')
+    project = require_project_path(job.get('project_path') or job.get('resume_project') or out / 'subtitles.yingziproj')
     editor = job.get('editor_state', (data or {}).get('editor'))
     job['project_path'] = str(project)
     job['editor_state'] = editor

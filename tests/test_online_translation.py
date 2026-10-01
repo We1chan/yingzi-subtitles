@@ -145,7 +145,7 @@ def test_rate_limit_retry_and_length_parameter(monkeypatch):
 
 
 def test_online_resume_preserves_each_success_and_uses_local_config(settings, tmp_path, monkeypatch):
-    project = tmp_path / 'subtitles.yingzi.json'
+    project = tmp_path / 'subtitles.yingziproj'
     cues = [Cue(0, 1, '前文', language='Chinese'), Cue(1, 2, 'Hello', language='English'),
             Cue(2, 3, 'Next', language='English'), Cue(3, 4, '后文', language='Chinese')]
     # Foreign project endpoints cannot override the locally configured service.
@@ -202,7 +202,7 @@ def test_settings_dialog_and_gui_online_process(application, settings, tmp_path,
         restored = ApiDialog()
         assert restored.batch_size.value() == 8
         restored.close()
-        project = tmp_path / 'project.yingzi.json'
+        project = tmp_path / 'project.yingziproj'
         save_project(project, tmp_path / 'missing.mp4', [Cue(i, i + 1, 'Hello', language='English') for i in range(3)], {'translation_backend': 'online'})
         window = Studio()
         window.load_saved_project(project)
@@ -296,7 +296,7 @@ def test_single_invalid_result_retries_only_twice_and_empty_input_sends_nothing(
 
 @pytest.mark.parametrize('batch_size', [1, 10])
 def test_worker_batch_count_checkpoints_context_and_timestamps(settings, tmp_path, monkeypatch, batch_size):
-    project = tmp_path / 'subtitles.yingzi.json'
+    project = tmp_path / 'subtitles.yingziproj'
     cues = [Cue(i * 2, i * 2 + 1.5, f'Line {i + 1}', language='English') for i in range(23)]
     cues[0].translation = '已经完成'
     save_project(project, tmp_path / 'missing.mp4', cues, {'translation_backend': 'online'})
@@ -339,7 +339,7 @@ def test_old_api_preferences_default_to_ten_and_invalid_batch_size_rejected(sett
 
 
 def test_failed_cue_does_not_block_later_cues_and_diagnostics_are_safe(settings, tmp_path, monkeypatch):
-    project = tmp_path / 'subtitles.yingzi.json'
+    project = tmp_path / 'subtitles.yingziproj'
     original = [Cue(i, i + .8, f'Line {i}', language='English') for i in range(4)]
     save_project(project, tmp_path / 'video.mp4', original, {'translation_backend': 'online'})
     def respond(requests, answer):
@@ -374,7 +374,7 @@ def test_failed_cue_does_not_block_later_cues_and_diagnostics_are_safe(settings,
 
 
 def test_worker_selected_translation_applies_glossary_style_and_completed_references(settings, tmp_path, monkeypatch):
-    project = tmp_path / 'subtitles.yingzi.json'
+    project = tmp_path / 'subtitles.yingziproj'
     cues = [Cue(0, 1, 'Earlier', '前文已完成', 'English'), Cue(1, 2, 'Hello', '旧译文', 'English'),
             Cue(2, 3, 'Do not translate', language='English')]
     save_project(project, tmp_path / 'missing.mp4', cues, {'translation_backend': 'online',
@@ -397,7 +397,7 @@ def test_worker_selected_translation_applies_glossary_style_and_completed_refere
 
 def test_online_concurrency_keeps_results_on_original_cues(settings, tmp_path, monkeypatch):
     import time
-    project = tmp_path / 'subtitles.yingzi.json'
+    project = tmp_path / 'subtitles.yingziproj'
     save_project(project, tmp_path / 'missing.mp4', [Cue(i, i + .8, f'Line {i}', language='English') for i in range(4)], {'translation_backend': 'online'})
     barrier = threading.Barrier(2)
     state = {'active': 0, 'maximum': 0}
@@ -539,7 +539,7 @@ def test_persistent_network_failure_is_bounded_and_certificate_errors_do_not_ret
 
 
 def test_real_disconnection_recovery_keeps_parallel_worker_running(settings, tmp_path, monkeypatch):
-    project = tmp_path / 'subtitles.yingzi.json'
+    project = tmp_path / 'subtitles.yingziproj'
     cues = [Cue(i, i + .8, f'Line {i}', language='English') for i in range(6)]
     cues[0].translation = 'Already saved'
     save_project(project, tmp_path / 'video.mp4', cues, {'translation_backend': 'online'})

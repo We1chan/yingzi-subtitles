@@ -9,7 +9,7 @@ from app.subtitles import Cue, save_project, load_project
 def test_incomplete_alignment_cannot_be_promoted_to_complete_translation(tmp_path):
     app = QApplication.instance() or QApplication([])
     initialize_fonts(app)
-    project = tmp_path / 'partial.yingzi.json'
+    project = tmp_path / 'partial.yingziproj'
     save_project(project, str(tmp_path / 'video.mp4'), [Cue(1, 3, 'まだ途中です。', language='Japanese')], status='aligning')
     window = Studio()
     window.load_saved_project(project)

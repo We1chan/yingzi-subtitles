@@ -36,11 +36,13 @@ Windows 桌面应用：选择视频，在本机识别中文／日语／英语、
 与视频剪辑软件的工程类似，映字使用 **`.yingziproj` 工程文件** 保存视频关联、字幕原文与译文、时间轴、字幕样式、识别／翻译选项，以及视频与音频编码设置。导入媒体时就会创建工程，尚未生成字幕也能保存；修改会自动保存，关闭时再次保存。
 
 - 顶部 **保存工程**（Ctrl+S）显示工程保存位置；**更多 → 另存工程…**（Ctrl+Shift+S）可自选名称与位置，后续修改保存到新文件。
-- 下次点击 **打开工程**（Ctrl+Shift+O），或拖入工程文件，即可继续。重新打开会恢复播放位置、选中的字幕、当前步骤、搜索筛选及画面收起状态。旧版 `.yingzi.json` 工程仍可打开和编辑。
+- 下次点击 **打开工程**（Ctrl+Shift+O），或拖入 `.yingziproj` 工程文件，即可继续。重新打开会恢复播放位置、选中的字幕、当前步骤、搜索筛选及画面收起状态。
 - 安装时会为当前 Windows 用户注册 `.yingziproj`，双击即可打开；已安装的用户可运行 `powershell -ExecutionPolicy Bypass -File tools\register_project.ps1` 注册。如果映字已启动，双击会把工程交给现有窗口。
 - 原视频移动后，使用 **更多 → 重新关联原媒体…** 找到视频，保留字幕、样式与编码设置。工程同时记录相对路径，一起移动的工程与媒体可自动重新找到。
 
 工程保存字幕和配置，引用原媒体文件，不复制大视频；这是映字自己的格式，不是 Adobe Premiere 的 `.prproj`。另存工程保留原工程和处理缓存，已有的识别／对齐进度仍可继续。缓存与日志保留在工程记录的输出文件夹；跨电脑搬迁时，需同时保留原媒体，需要继续处理或重新分段时也需携带该缓存文件夹，并重新选择本机可用的模型。撤销历史在本次打开期间保留。中断视频导出后可按已保存的编码设置重新导出，不能从已编码帧续接。
+
+工程格式统一为 `.yingziproj`。旧 `.yingzi.json` 文件可运行 `.\.venv\Scripts\python.exe tools\migrate_projects.py output` 批量迁移，或将 `output` 换成具体工程文件／目录。工具会先验证全部旧工程，再在原文件夹中改名，逐个核对文件内容；不会覆盖已有新工程，字幕、样式、处理状态和缓存保持不变。可加 `--dry-run` 只检查。迁移完成后，原 `.yingzi.json` 文件不再保留。
 
 播放器右侧的“声音…”可查看实际输出设备、调整预览音量和静音。默认跟随系统声音输出，运行中切换耳机或扬声器也会更新；可为本次使用手动指定设备，指定设备断开后回到系统默认。音量为零或静音时，按钮显示“已静音…”。
 
@@ -146,7 +148,7 @@ Cohere 权重约 4.1 GB，Parakeet ONNX 文件约 2.5 GB。扩展环境另需 Py
 - `bilingual.srt`：日文或英文在上、中文在下，共用同一时间轴。
 - `original.srt`、`translated.srt`：原文和中文版本。
 - `bilingual.vtt`：WebVTT 双语字幕。
-- `.yingziproj`：可再次打开编辑的映字工程；旧版或命令行生成的 `subtitles.yingzi.json` 同样受支持。另存到自选位置后，工程会记录原输出文件夹的位置。
+- `.yingziproj`：可再次打开编辑的映字工程；命令行处理默认生成 `subtitles.yingziproj`。另存到自选位置后，工程会记录原输出文件夹的位置。
 - `recognition.json`：识别原始结果；`run.log`：运行日志。
 - `.pipeline/`：提取的音频、逐片段识别和原始对齐缓存，用于继续处理和重新分段。缓存会占用磁盘；项目完成且不再需要恢复或重新分段时可以删除该目录，保留工程和字幕文件。
 - `api-diagnostics.jsonl`：在线请求的编号、模型、结束原因、输出／推理字符数、Token 用量、耗时与重试次数。网络错误另记连接／读取阶段、错误类别、系统错误码和重试等待时间；不会记录密钥、代理凭据、提示词、原文正文或模型思考文本。日志可从“日志”窗口查看。
@@ -198,7 +200,7 @@ Cohere 和 Parakeet 使用独立的 `runtime/asr-env`，由 `requirements-extra.
 ```powershell
 .\.venv\Scripts\python.exe tools\download_assets.py asr-small
 .\.venv\Scripts\python.exe tools\run_validation.py --languages english --asr-model models/Qwen3-ASR-0.6B
-.\.venv\Scripts\python.exe tools\smoke_ui_flow.py output/验证_英中双语_Qwen3-ASR-0.6B/subtitles.yingzi.json
+.\.venv\Scripts\python.exe tools\smoke_ui_flow.py output/验证_英中双语_Qwen3-ASR-0.6B/subtitles.yingziproj
 ```
 
 翻译引擎仅监听随机端口的 `127.0.0.1`，使用每次启动随机生成的 API 密钥；任务结束后关闭。原始媒体不会被上传。

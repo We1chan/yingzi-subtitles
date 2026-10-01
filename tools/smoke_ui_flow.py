@@ -23,10 +23,10 @@ parser = argparse.ArgumentParser()
 parser.add_argument('project', nargs='?')
 parser.add_argument('--generate', action='store_true', help='Run the full ASR pipeline through GUI QProcess')
 args = parser.parse_args()
-source = Path(args.project) if args.project else ROOT / 'output/验证_日中双语/subtitles.yingzi.json'
+source = Path(args.project) if args.project else ROOT / 'output/验证_日中双语/subtitles.yingziproj'
 data, cues = load_project(source)
 cues[0].translation = ''
-project = ROOT / f'output/验证_界面翻译_{cues[0].language}/subtitles.yingzi.json'
+project = ROOT / f'output/验证_界面翻译_{cues[0].language}/subtitles.yingziproj'
 save_project(project, data['video'], cues, data.get('options'), status='translating')
 window.load_saved_project(project)
 window.audio.setVolume(0)

@@ -21,7 +21,7 @@ Real-model checks (need downloaded models; fetch test audio into the gitignored 
 
 ```powershell
 .\.venv\Scripts\python.exe tools\run_validation.py [--languages english] [--asr-model models/Qwen3-ASR-0.6B] [--device cpu]
-.\.venv\Scripts\python.exe tools\smoke_ui_flow.py [path\to\subtitles.yingzi.json]
+.\.venv\Scripts\python.exe tools\smoke_ui_flow.py [path\to\subtitles.yingziproj]
 .\.venv\Scripts\python.exe tools\smoke_video_export.py
 ```
 
@@ -55,9 +55,11 @@ The GUI never runs inference in-process. Every job is a child process that talks
 
 ## Project file and state
 
-`.yingziproj` and legacy `subtitles.yingzi.json` (`subtitles.save_project/load_project`, `version: 1`) hold `video`, `options`, `status`, and `cues` (the `Cue` dataclass: `start, end, text, translation, language, translation_error`). Optional `workspace` locates processing output and `.pipeline/`, while `editor` stores the playhead, selected rows, step, preview state, filters and last export target. Relative media/workspace paths support moving a bundle. Use `subtitles.project_workspace` rather than assuming the project lives next to its cache. GUI import immediately creates a draft project; generation and worker checkpoints retain its chosen filename through `job.project_path`. The worker strips `project_path` and `editor_state` from saved processing options. Loading blocks autosave; UI autosave never writes while the worker owns the project. `tools/register_project.ps1` registers the current-user file association; `gui.main` forwards subsequent opens to the running app over a local socket.
+`.yingziproj` and default `subtitles.yingziproj` (`subtitles.save_project/load_project`, `version: 1`) hold `video`, `options`, `status`, and `cues` (the `Cue` dataclass: `start, end, text, translation, language, translation_error`). Optional `workspace` locates processing output and `.pipeline/`, while `editor` stores the playhead, selected rows, step, preview state, filters and last export target. Relative media/workspace paths support moving a bundle. Use `subtitles.project_workspace` rather than assuming the project lives next to its cache. GUI import immediately creates a draft project; generation and worker checkpoints retain its chosen filename through `job.project_path`. The worker strips `project_path` and `editor_state` from saved processing options. Loading blocks autosave; UI autosave never writes while the worker owns the project. `tools/register_project.ps1` registers the current-user file association; `gui.main` forwards subsequent opens to the running app over a local socket.
 
 `status` drives what "继续处理/继续翻译" does: `recognizing` / `aligning` → rerun the pipeline from cache; `translating` / `translation_partial` → translate only the cues where `needs_translation()` is true (Japanese/English with an empty or failed translation). The editor requires validated, non-overlapping cues. Write files through `subtitles.atomic_write` (tmp + replace; `.srt` gets a UTF-8 BOM).
+
+Old .yingzi.json projects are only read by app.project_migration during explicit migration. Application loading and saving require .yingziproj. The migration tool validates all candidates before renaming files within the selected root, refuses conflicts and symlinks, and verifies identical bytes after each rename.
 
 ## Translation
 

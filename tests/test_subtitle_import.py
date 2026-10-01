@@ -43,7 +43,7 @@ def test_invalid_srt_is_rejected_completely(text):
 
 
 @pytest.mark.parametrize('path,expected', [('video.MP4', 'media'), ('sound.OPUS', 'media'),
-    ('subtitle.SRT', 'srt'), ('project.YINGZI.JSON', 'project'), ('notes.txt', None),
+    ('subtitle.SRT', 'srt'), ('project.YINGZIPROJ', 'project'), ('project.YINGZI.JSON', None), ('notes.txt', None),
     ('image.png', None), ('subtitle.srt.exe', None), ('settings.json', None), ('subtitles.ass', None)])
 def test_supported_input_types(path, expected):
     assert input_kind(path) == expected

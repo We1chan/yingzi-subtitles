@@ -53,7 +53,7 @@ def rgb(image):
 
 
 def test_style_drag_and_project_restore(application, tmp_path):
-    project = tmp_path / 'styled.yingzi.json'
+    project = tmp_path / 'styled.yingziproj'
     save_project(project, str(tmp_path / 'missing.mp4'), [Cue(0, 2, 'Hello', '你好', 'English')])
     window = Studio()
     window.load_saved_project(project)
@@ -176,7 +176,7 @@ def test_gui_export_process_success_cancel_and_failure(application, tmp_path):
     from PySide6.QtCore import QEventLoop, QTimer
     video = tmp_path / 'source.mp4'
     run_ffmpeg(['-y', '-f', 'lavfi', '-i', 'color=c=black:s=320x180:r=25:d=1', '-c:v', 'libx264', video])
-    project = tmp_path / 'project.yingzi.json'
+    project = tmp_path / 'project.yingziproj'
     save_project(project, video, [Cue(.1, .6, 'Hello', '你好', 'English')])
     window = Studio()
     window.load_saved_project(project)
@@ -222,7 +222,7 @@ def test_thick_outline_keeps_cjk_fill_and_pending_style_saves(application, tmp_p
     assert translated.sum() > 150
     half = rgb(render_overlay('半透明字幕', CaptionStyle(opacity=50, outline=6), 1280, 720))
     assert 120 <= half[:, :, 3].max() <= 128
-    first, second = tmp_path / 'one.yingzi.json', tmp_path / 'two.yingzi.json'
+    first, second = tmp_path / 'one.yingziproj', tmp_path / 'two.yingziproj'
     for path in (first, second):
         save_project(path, tmp_path / 'missing.mp4', [Cue(0, 1, '字幕')])
     window = Studio()

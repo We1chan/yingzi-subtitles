@@ -649,7 +649,7 @@ class Studio(QMainWindow):
             elif kind == 'media':
                 self.load_video(path)
             else:
-                raise ValueError('不支持此文件类型，请选择视频、音频、SRT 字幕或 .yingziproj / .yingzi.json 工程。')
+                raise ValueError('不支持此文件类型，请选择视频、音频、SRT 字幕或 .yingziproj 工程。')
         except Exception as exc:
             self.notify(f'无法打开拖入的文件：{exc}', error=True)
             return False
@@ -1190,7 +1190,7 @@ class Studio(QMainWindow):
             self.fill_table()
 
     def recover_checkpoint(self):
-        candidate = self.project or self.output_dir / 'subtitles.yingzi.json'
+        candidate = self.project or self.output_dir / 'subtitles.yingziproj'
         if candidate.exists():
             try:
                 data, self.cues = load_project(candidate)
@@ -1235,7 +1235,7 @@ class Studio(QMainWindow):
     def open_project(self):
         if self.busy():
             return
-        filename, _ = QFileDialog.getOpenFileName(self, '打开映字工程', str(self.project.parent if self.project else OUTPUT), '映字工程 (*.yingziproj *.yingzi.json);;旧版 JSON (*.json)')
+        filename, _ = QFileDialog.getOpenFileName(self, '打开映字工程', str(self.project.parent if self.project else OUTPUT), '映字工程 (*.yingziproj)')
         if filename:
             try:
                 self.load_saved_project(filename)
@@ -1504,7 +1504,7 @@ class Studio(QMainWindow):
             event.setDropAction(Qt.CopyAction)
             event.accept()
         elif not self.busy() and event.mimeData().urls():
-            self.notify('支持拖入视频、音频、SRT 字幕或 .yingzi.json 工程；SRT 需先载入视频。')
+            self.notify('支持拖入视频、音频、SRT 字幕或 .yingziproj 工程；SRT 需先载入视频。')
 
     def dragMoveEvent(self, event):
         self.dragEnterEvent(event)

@@ -84,7 +84,7 @@ def test_unusable_drop_keeps_current_project(application, tmp_path, monkeypatch,
 
 def test_project_drop_and_invalid_project_report(application, tmp_path):
     video = tmp_path / 'missing.mp4'
-    project = tmp_path / '字幕.YINGZI.JSON'
+    project = tmp_path / '字幕.YINGZIPROJ'
     cues = [Cue(1, 2, 'Hello.', '你好。', 'English')]
     save_project(project, video, cues)
     window = Studio()
@@ -94,7 +94,7 @@ def test_project_drop_and_invalid_project_report(application, tmp_path):
     mime.setUrls([QUrl.fromLocalFile(str(project))])
     assert all(event.isAccepted() for event in send_drag(application, window.preview.viewport(), mime))
     assert window.project == project and window.cues == cues
-    broken = tmp_path / 'broken.yingzi.json'
+    broken = tmp_path / 'broken.yingziproj'
     broken.write_text('{', encoding='utf-8')
     mime.setUrls([QUrl.fromLocalFile(str(broken))])
     events = send_drag(application, window.preview.viewport(), mime)
@@ -157,7 +157,7 @@ def test_srt_requires_loaded_video_and_invalid_import_preserves_project(applicat
     video.touch()
     window.video = video
     cues = [Cue(1, 2, 'Original', '原字幕', 'English')]
-    project = tmp_path / 'original.yingzi.json'
+    project = tmp_path / 'original.yingziproj'
     save_project(project, video, cues)
     window.project, window.cues = project, cues
     before = project.read_bytes()

@@ -8,7 +8,7 @@ from app.subtitles import Cue, load_project, save_project
 
 
 def test_resume_translates_english_and_japanese_and_preserves_completed_rows(tmp_path, monkeypatch):
-    project = tmp_path / 'subtitles.yingzi.json'
+    project = tmp_path / 'subtitles.yingziproj'
     selected = tmp_path / 'translation.gguf'
     cues = [Cue(0, 1, '中文', language='Chinese'), Cue(1, 2, 'Hello.', language='English'),
             Cue(2, 3, 'こんにちは', language='Japanese'), Cue(3, 4, 'Done.', '已完成。', 'English')]
@@ -41,7 +41,7 @@ def test_resume_translates_english_and_japanese_and_preserves_completed_rows(tmp
 
 @pytest.mark.parametrize('bilingual', [True, False])
 def test_missing_translator_keeps_english_checkpoint_and_original_only_works(tmp_path, monkeypatch, bilingual):
-    project = tmp_path / 'subtitles.yingzi.json'
+    project = tmp_path / 'subtitles.yingziproj'
     video = str(tmp_path / 'video.mp4')
     save_project(project, video, [Cue(0, 1, 'Hello.', language='English')])
     monkeypatch.setattr(worker, 'event', lambda *args, **kwargs: None)
@@ -91,7 +91,7 @@ def test_worker_routes_selected_asr_and_aligner_and_explicit_english(tmp_path, m
     job = {'video': str(video), 'output': str(tmp_path), 'asr_model': str(tmp_path / 'custom-asr'), 'align_model': str(tmp_path / 'custom-align'), 'language': 'English', 'bilingual': False}
     worker.process({**job, **segmentation})
     assert seen == {'asr': job['asr_model'], 'align': job['align_model'], 'language': 'English'}
-    data, cues = load_project(tmp_path / 'subtitles.yingzi.json')
+    data, cues = load_project(tmp_path / 'subtitles.yingziproj')
     assert data['options']['asr_model'] == job['asr_model']
     assert len(cues) == count
     assert ' '.join(cue.text for cue in cues) == 'Hello wonderful world.'
@@ -137,11 +137,11 @@ def test_external_engine_flows_into_aligner_and_does_not_complete_after_failure(
     if fail:
         with pytest.raises(RuntimeError, match='child failed'):
             worker.process(job)
-        assert load_project(tmp_path / 'subtitles.yingzi.json')[0]['status'] == 'recognizing'
+        assert load_project(tmp_path / 'subtitles.yingziproj')[0]['status'] == 'recognizing'
         assert not calls
     else:
         worker.process(job)
-        data, cues = load_project(tmp_path / 'subtitles.yingzi.json')
+        data, cues = load_project(tmp_path / 'subtitles.yingziproj')
         assert data['status'] == 'complete' and calls
         assert cues[0].text == 'Hello world.' and cues[0].start == .1
     record = json.loads((tmp_path / 'recognition.json').read_text(encoding='utf-8'))

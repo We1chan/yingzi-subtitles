@@ -43,7 +43,7 @@ def run_pipeline(job, paths, out, previous_cues, hooks):
         atomic_write(state_path, json.dumps(state, ensure_ascii=False))
 
     def checkpoint(cues, status):
-        project = Path(job.get('project_path') or out / 'subtitles.yingzi.json')
+        project = Path(job.get('project_path') or out / 'subtitles.yingziproj')
         options = {key: value for key, value in job.items() if key not in ('project_path', 'editor_state', 'resume_project')}
         save_project(project, video, cues, options, status=status, workspace=out, editor=job.get('editor_state'))
         h.event('checkpoint', project=str(project), status=status)

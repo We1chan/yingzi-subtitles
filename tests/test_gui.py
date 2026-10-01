@@ -17,7 +17,7 @@ def app():
 
 
 def test_editing_source_invalidates_translation_and_saves(app, tmp_path):
-    project = tmp_path / '字幕.yingzi.json'
+    project = tmp_path / '字幕.yingziproj'
     save_project(project, str(tmp_path / 'missing.mp4'), [Cue(1, 2, 'こんにちは。', '你好。', 'Japanese')])
     window = Studio()
     window.load_saved_project(project)
@@ -43,7 +43,7 @@ def test_preview_escapes_caption_markup(app):
 
 
 def test_english_project_restores_models_and_invalidates_edited_translation(app, tmp_path, monkeypatch):
-    project = tmp_path / 'english.yingzi.json'
+    project = tmp_path / 'english.yingziproj'
     selection = {'asr_model': str(tmp_path / 'asr06'), 'translation_model': str(tmp_path / 'chat.gguf')}
     save_project(project, str(tmp_path / 'missing.mp4'), [Cue(1, 2, 'Hello.', '你好。', 'English')], {'language': 'English', 'max_chars': 68, **selection})
     window = Studio()
@@ -74,7 +74,7 @@ def test_smart_segmentation_default_language_change_and_project_roundtrip(app, t
     window.language.setCurrentIndex(window.language.findData('English'))
     options = window.current_options()
     assert options['segmentation_mode'] == 'smart' and options['max_chars'] == 68
-    project = tmp_path / 'smart.yingzi.json'
+    project = tmp_path / 'smart.yingziproj'
     cues = [Cue(1, 3, 'Hello world.', language='English')]
     save_project(project, tmp_path / 'missing.mp4', cues, options)
     window.max_chars.setValue(40)

@@ -48,7 +48,7 @@ if args.demo:
         ('Make every word sound natural.', '逐句校对，让表达更自然。'),
         ('Choose the style that fits your story.', '选择适合视频的字幕样式。'),
         ('Your subtitles are ready to share.', '校对完成，导出你的作品。')])]
-    project = Path(demo.name) / 'sample.yingzi.json'
+    project = Path(demo.name) / 'sample.yingziproj'
     save_project(project, video, cues, {'language': 'English', 'segmentation_mode': 'smart'})
     window.load_saved_project(project)
     window.player.setPosition(1000)

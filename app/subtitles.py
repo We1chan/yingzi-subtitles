@@ -115,6 +115,7 @@ def resolve_project_path(value, relative, project):
 
 
 def save_project(path, video, cues, options=None, status='complete', *, workspace=None, editor=None):
+    path = require_project_path(path)
     validate(cues)
     data = {'version': 1, 'video': str(video), 'options': options or {}, 'status': status, 'cues': [dataclasses.asdict(cue) for cue in cues]}
     data['video_relative'] = relative_path(video, Path(path).parent)
@@ -127,6 +128,17 @@ def save_project(path, video, cues, options=None, status='complete', *, workspac
 
 
 def load_project(path):
+    return _load_project_data(require_project_path(path))
+
+
+def require_project_path(path):
+    path = Path(path)
+    if path.suffix.lower() != '.yingziproj':
+        raise ValueError('请选择 .yingziproj 映字工程。旧工程请先使用迁移工具转换。')
+    return path
+
+
+def _load_project_data(path):
     data = json.loads(Path(path).read_text(encoding='utf-8-sig'))
     if (not isinstance(data, dict) or data.get('version') != 1 or not isinstance(data.get('cues'), list)
             or not isinstance(data.get('video'), str) or not data['video'].strip()

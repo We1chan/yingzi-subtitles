@@ -52,7 +52,7 @@ def test_stage_resume_and_resegment_reuse_durable_results(tmp_path, monkeypatch,
     monkeypatch.setattr(worker, 'event', lambda *args, **kwargs: None)
     job = {'video': str(video), 'output': str(tmp_path), 'language': 'English', 'bilingual': False,
            'max_chars': 16, 'segmentation_mode': 'fixed'}
-    project = tmp_path / ('工程/保存的工程.yingziproj' if named_project else 'subtitles.yingzi.json')
+    project = tmp_path / ('工程/保存的工程.yingziproj' if named_project else 'subtitles.yingziproj')
     if named_project:
         job['project_path'] = str(project)
     with pytest.raises(RuntimeError, match='interruption'):
