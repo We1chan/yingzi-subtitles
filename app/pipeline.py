@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
-from .subtitles import aligned_cues, atomic_write, save_project, validate, project_workspace
+from .subtitles import aligned_cues, atomic_write, save_project, validate, project_workspace, sentence_end
 
 
 def fingerprint(video, job, paths):
@@ -55,7 +55,6 @@ def run_pipeline(job, paths, out, previous_cues, hooks):
         edited = ''.join(''.join(cue.text.split()) for cue in previous_cues)
         if cached != edited:
             raise ValueError('原文已经人工修改，与对齐缓存不一致。请先撤销原文修改或重新生成，避免覆盖校对结果。')
-    backend = h.asr_backend(paths['asr_model'])
     if not state.get('aligned_complete'):
         persist()
         checkpoint(previous_cues, 'aligning' if state.get('recognition_complete') else 'recognizing')
@@ -77,11 +76,7 @@ def run_pipeline(job, paths, out, previous_cues, hooks):
         missing = [i for i, record in enumerate(state['records']) if record is None]
         if missing:
             if issue := h.model_issue(paths['asr_model'], 'asr_model'):
-                raise ValueError('所选识别模型不可用：' + issue)
-            if issue := h.asr_language_issue(paths['asr_model'], job.get('language')):
-                raise ValueError(issue)
-            if backend != 'qwen' and not h.extra_runtime_ready():
-                raise ValueError('扩展识别引擎未安装，请打开“选择模型”检查。')
+                raise ValueError('Qwen3-ASR-1.7B 识别模型不可用：' + issue)
             h.progress(15, f'识别缓存 {len(state["records"]) - len(missing)}/{len(state["records"])}，加载识别模型')
 
             def store_record(index, record):
@@ -89,31 +84,22 @@ def run_pipeline(job, paths, out, previous_cues, hooks):
                 persist()
                 records = [r for r in state['records'] if r is not None and r['text'].strip()]
                 atomic_write(out / 'recognition.json', json.dumps({'video': str(video), 'duration': state['duration'],
-                    'backend': backend, 'records': records}, ensure_ascii=False, indent=2))
+                    'backend': 'qwen', 'records': records}, ensure_ascii=False, indent=2))
                 completed = sum(r is not None for r in state['records'])
                 h.progress(16 + 37 * completed / len(state['spans']), f'识别语音 {completed}/{len(state["spans"])}')
 
-            if backend == 'qwen':
-                from qwen_asr import Qwen3ASRModel
-                model = Qwen3ASRModel.from_pretrained(str(paths['asr_model']), max_inference_batch_size=1,
-                    max_new_tokens=512, **h.load_options(job.get('device', 'auto')))
-                try:
-                    for index in missing:
-                        start, end = state['spans'][index]
-                        result = model.transcribe(audio=h.read_span(wav, start, end), language=job.get('language') or None,
-                                                  context=job.get('context', ''))[0]
-                        store_record(index, {'start': start, 'end': end, 'text': result.text.strip(), 'language': result.language})
-                finally:
-                    del model
-                    h.release()
-            else:
-                from .asr_process import external_records
-                for message in external_records(job, wav, [state['spans'][i] for i in missing]):
-                    if message['type'] == 'record':
-                        message['record']['inference_seconds'] = message['seconds']
-                        store_record(missing[message['index']], message['record'])
-                    elif message['type'] == 'backend':
-                        h.event('backend', **{key: value for key, value in message.items() if key != 'type'})
+            from qwen_asr import Qwen3ASRModel
+            model = Qwen3ASRModel.from_pretrained(str(paths['asr_model']), max_inference_batch_size=1,
+                max_new_tokens=512, **h.load_options(job.get('device', 'auto')))
+            try:
+                for index in missing:
+                    start, end = state['spans'][index]
+                    result = model.transcribe(audio=h.read_span(wav, start, end), language=job.get('language') or None,
+                                              context=job.get('context', ''))[0]
+                    store_record(index, {'start': start, 'end': end, 'text': result.text.strip(), 'language': result.language})
+            finally:
+                del model
+                h.release()
             if any(record is None for record in state['records']):
                 raise ValueError('识别结果不完整，已保留缓存，可继续处理剩余片段。')
         state['recognition_complete'] = True
@@ -160,16 +146,42 @@ def run_pipeline(job, paths, out, previous_cues, hooks):
 
 def build_cues(state, job):
     cues = []
-    for record, alignment in zip(state['records'], state['alignments']):
-        if record is None or not record['text'].strip():
-            continue
-        if alignment is None:
-            break
-        segment = aligned_cues(record['text'], [SimpleNamespace(**item) for item in alignment],
-            offset=record['start'], duration=record['end'] - record['start'], language=record['language'],
-            max_chars=int(job.get('max_chars') or 30), segmentation_mode=job.get('segmentation_mode', 'smart'))
+    smart = job.get('segmentation_mode', 'smart') == 'smart'
+    text, items, language, record_end = '', [], '', 0
+
+    def flush():
+        nonlocal text, items
+        if not items:
+            return
+        segment = aligned_cues(text, items, language=language,
+            max_chars=int(job.get('max_chars') or 30), segmentation_mode='smart' if smart else 'fixed')
         if cues and segment and segment[0].start < cues[-1].end:
             segment[0].start = cues[-1].end
         cues.extend(segment)
+        text, items = '', []
+
+    for record, alignment in zip(state['records'], state['alignments']):
+        if record is None:
+            break
+        if not record['text'].strip():
+            flush()
+            continue
+        if alignment is None:
+            break
+        if not alignment:
+            raise ValueError('识别出了文字，但未获得有效时间戳。请重试该视频。')
+        if items and (not smart or record['language'] != language or record['start'] - record_end >= 2
+                      or sentence_end(text, language)):
+            flush()
+        language, record_end = record['language'], record['end']
+        text += (' ' if text and language == 'English' else '') + record['text'].strip()
+        # Cached token times are relative to their recognition window, not to the cue.
+        duration = record['end'] - record['start']
+        for item in alignment:
+            start = min(max(0, float(item['start_time'])), max(0, duration - .08))
+            end = min(max(0, float(item['end_time'])), duration)
+            items.append(SimpleNamespace(text=item['text'], start_time=record['start'] + start,
+                                         end_time=record['start'] + end))
+    flush()
     validate(cues)
     return cues

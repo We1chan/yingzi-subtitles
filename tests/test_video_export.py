@@ -188,7 +188,7 @@ def test_audio_only_rejected_and_style_values_sanitized(application, tmp_path):
     assert style.color == '#FFFFFF' and style.alignment == 'center'
 
 
-def test_gui_export_process_success_cancel_and_failure(application, tmp_path):
+def test_gui_export_process_success_cancel_and_failure(application, tmp_path, monkeypatch):
     from PySide6.QtCore import QEventLoop, QTimer
     video = tmp_path / 'source.mp4'
     run_ffmpeg(['-y', '-f', 'lavfi', '-i', 'color=c=black:s=320x180:r=25:d=1', '-c:v', 'libx264', video])
@@ -224,9 +224,12 @@ def test_gui_export_process_success_cancel_and_failure(application, tmp_path):
     audio = tmp_path / 'audio.wav'
     run_ffmpeg(['-y', '-f', 'lavfi', '-i', 'sine=duration=0.1', audio])
     window.session.video = audio
+    notices = []
+    monkeypatch.setattr('app.gui.QMessageBox.information', lambda *args: notices.append(args[2]))
     window.start_video_export(target)
-    wait()
-    assert '纯音频' in window.status.text() and target.read_bytes() == old
+    window.refresh_workspace()
+    assert notices and '音频文件' in notices[0]
+    assert not window.busy() and not window.export_video_button.isEnabled() and target.read_bytes() == old
     window.close()
 
 

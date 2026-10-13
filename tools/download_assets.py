@@ -1,9 +1,8 @@
 """Download pinned local assets, with restartable transfers and SHA-256 checks."""
+import argparse
 import concurrent.futures
 import hashlib
 import json
-import os
-import re
 import subprocess
 import sys
 import time
@@ -155,13 +154,20 @@ def install_runtime_archive(name, expected, folder):
             zip_file.extract(item, target)
 
 
-if __name__ == '__main__':
-    sys.stdout.reconfigure(encoding='utf-8')
-    tasks = {'asr': lambda: snapshot('Qwen/Qwen3-ASR-1.7B', 'Qwen3-ASR-1.7B'), 'asr-small': lambda: snapshot('Qwen/Qwen3-ASR-0.6B', 'Qwen3-ASR-0.6B'), 'cohere': lambda: snapshot('CohereLabs/cohere-transcribe-03-2026', 'cohere-transcribe-03-2026'), 'parakeet': lambda: snapshot('istupakov/parakeet-tdt-0.6b-v2-onnx', 'parakeet-tdt-0.6b-v2-onnx', ('.json', '.onnx', '.data', '.txt', '.md'), ('.int8.',)), 'align': lambda: snapshot('Qwen/Qwen3-ForcedAligner-0.6B', 'Qwen3-ForcedAligner-0.6B'), 'translate': translation, 'runtime': runtime}
-    selected = sys.argv[1:] or ['asr', 'align', 'translate', 'runtime']
-    tasks['extra-runtime'] = lambda: subprocess.run([sys.executable, '-u', str(ROOT / 'tools' / 'setup_extra.py')], check=True, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+def main(argv=None):
+    tasks = {'asr': lambda: snapshot('Qwen/Qwen3-ASR-1.7B', 'Qwen3-ASR-1.7B'),
+             'align': lambda: snapshot('Qwen/Qwen3-ForcedAligner-0.6B', 'Qwen3-ForcedAligner-0.6B'),
+             'translate': translation, 'runtime': runtime}
+    parser = argparse.ArgumentParser(description='下载 Qwen3-ASR-1.7B、时间轴对齐及可选翻译组件')
+    parser.add_argument('assets', nargs='+', choices=tasks)
+    selected = parser.parse_args((sys.argv[1:] if argv is None else argv) or list(tasks)).assets
     with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
         futures = {pool.submit(tasks[name]): name for name in selected}
         for future in concurrent.futures.as_completed(futures):
             future.result()
             print(f'READY: {futures[future]}', flush=True)
+
+
+if __name__ == '__main__':
+    sys.stdout.reconfigure(encoding='utf-8')
+    main()

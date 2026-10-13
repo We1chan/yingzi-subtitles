@@ -106,3 +106,71 @@ def test_indivisible_long_word_is_preserved_without_inventing_timestamps(charact
 def test_missing_alignment_still_fails_in_smart_mode():
     with pytest.raises(ValueError, match='未覆盖全部'):
         split('今天出发。', items=tokens(['今天']))
+
+
+def test_complete_sentence_uses_readable_duration_without_cutting_a_noun_phrase():
+    text = 'The drivers are ready for what could be what is expected to be multiple formation laps behind the safety car.'
+    assert [cue.text for cue in split(text, 'English', step=.32)] == [text]
+    limited = split(text, 'English', step=.32, max_seconds=3)
+    assert all(cue.end - cue.start <= 3.001 for cue in limited)
+    assert ' '.join(cue.text for cue in limited) == text
+
+
+def test_sentence_boundary_does_not_borrow_a_fragment_from_the_next_sentence():
+    text = 'They know this is the opportunity. Off, off goes the Cadillac.'
+    items = tokens(text.split(), .2)
+    for item in items[7:]:
+        item.start_time += .8
+        item.end_time += .8
+    cues = split(text, 'English', items=items)
+    assert [cue.text for cue in cues] == ['They know this is the opportunity.', 'Off, off goes the Cadillac.']
+
+
+@pytest.mark.parametrize('language, words, text', [
+    ('English', ['Gabriel', 'left', 'him', 'all', 'the', 'space', 'in', 'the', 'world'],
+     'Gabriel, left him all the space in the world.'),
+    ('Chinese', ['请', '先', '打', '开', '软', '件'], '请先打开软件。'),
+    ('Japanese', ['大丈夫', 'です'], '大丈夫です。'),
+])
+def test_breathing_pause_does_not_force_an_incomplete_sentence(language, words, text):
+    items = tokens(words, .25)
+    pause = 1 if language != 'Chinese' else 5
+    for item in items[pause:]:
+        item.start_time += .8
+        item.end_time += .8
+    cues = split(text, language, items=items)
+    assert [cue.text for cue in cues] == [text]
+    assert cues[0].start == 0 and cues[0].end == pytest.approx(len(words) * .25 + .8)
+
+
+def test_long_silence_still_separates_utterances_without_terminal_punctuation():
+    items = tokens(['Hello', 'everyone', 'Welcome', 'back'], .4)
+    for item in items[2:]:
+        item.start_time += 2
+        item.end_time += 2
+    assert [cue.text for cue in split('Hello everyone Welcome back', 'English', items=items)] == ['Hello everyone', 'Welcome back']
+
+
+def test_clause_punctuation_wins_over_a_pause_inside_a_phrase():
+    text = "A season's best for Fernando Alonso, chased all the way to the flag by Lando Norris, and the points are completed by Arvid Lindblad."
+    items = tokens(text.split(), .35)
+    for item in items[13:]:
+        item.start_time += .32
+        item.end_time += .32
+    cues = split(text, 'English', items=items)
+    assert len(cues) > 1
+    assert all(cue.text.endswith((',', '.')) for cue in cues)
+    assert ' '.join(cue.text for cue in cues) == text
+
+
+@pytest.mark.parametrize('language, words, text', [
+    ('English', ['We', 'need', 'the', 'remaining', 'work', 'today'], 'We need the remaining work today.'),
+    ('Japanese', ['とても', '便利', 'です'], 'とても便利です。'),
+])
+def test_pause_does_not_strand_a_dependent_word_or_sentence_ending(language, words, text):
+    items = tokens(words, .3)
+    pause = 3 if language == 'English' else 2
+    for item in items[pause:]:
+        item.start_time += 1.2
+        item.end_time += 1.2
+    assert [cue.text for cue in split(text, language, items=items)] == [text]

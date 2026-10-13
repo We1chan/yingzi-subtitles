@@ -6,9 +6,10 @@ from pathlib import Path
 from .subtitles import Cue, parse_time, validate
 
 
-MEDIA_SUFFIXES = ('.mp4', '.mkv', '.mov', '.avi', '.webm', '.m4v', '.ts', '.flv', '.wmv',
-                  '.mpg', '.mpeg', '.mts', '.m2ts', '.ogv', '.3gp', '.3g2',
-                  '.mp3', '.wav', '.m4a', '.flac', '.aac', '.ogg', '.opus', '.mka', '.aif', '.aiff', '.wma')
+VIDEO_SUFFIXES = ('.mp4', '.mkv', '.mov', '.avi', '.webm', '.m4v', '.ts', '.flv', '.wmv',
+                  '.mpg', '.mpeg', '.mts', '.m2ts', '.ogv', '.3gp', '.3g2')
+AUDIO_SUFFIXES = ('.mp3', '.wav', '.m4a', '.flac', '.aac', '.ogg', '.opus', '.mka', '.aif', '.aiff', '.wma')
+MEDIA_SUFFIXES = VIDEO_SUFFIXES + AUDIO_SUFFIXES
 MEDIA_FILTER = '视频和音频 (' + ' '.join('*' + suffix for suffix in MEDIA_SUFFIXES) + ')'
 TIME_RANGE = re.compile(r'\s*(\d+:[0-5]\d:[0-5]\d[,.]\d{3})\s*-->\s*(\d+:[0-5]\d:[0-5]\d[,.]\d{3})\s*')
 

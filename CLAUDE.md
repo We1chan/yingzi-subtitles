@@ -21,19 +21,16 @@ Everything runs on the project venv (Python 3.12). From PowerShell:
 Real-model checks (need downloaded models; fetch test audio into the gitignored `tests/fixtures/` and write to `projects/`):
 
 ```powershell
-.\.venv\Scripts\python.exe tools\run_validation.py [--languages english] [--asr-model models/Qwen3-ASR-0.6B] [--device cpu]
+.\.venv\Scripts\python.exe tools\run_validation.py [--languages english] [--device cpu]
 .\.venv\Scripts\python.exe tools\smoke_ui_flow.py [path\to\subtitles.yingziproj] [--generate]   # --generate runs the full ASR pipeline through the GUI QProcess
 .\.venv\Scripts\python.exe tools\smoke_video_export.py
 ```
 
-Setup/assets: `setup.cmd` → `tools/setup.ps1` prompts for `original`, `online` or `local`; `-Profile` selects without prompting, `-Device auto|cpu|cuda` chooses the PyTorch build. `-PlanOnly` reports the asset/device/disk plan without installing or downloading. `tools/install_plan.ps1` owns this plan; setup installs exact torch/torchaudio CPU or cu128 wheels, then the remaining `requirements-lock.txt` packages. Original/online profiles download ASR + align; local also downloads translate + runtime. `tools/configure_install.py` persists first-run defaults while preserving existing API settings. `tools\download_assets.py [asr|asr-small|align|translate|runtime|cohere|parakeet|extra-runtime]` downloads pinned, SHA-256-checked, resumable assets. There is no linter or formatter config.
+Setup/assets: `setup.cmd` → `tools/setup.ps1` prompts for `original`, `online` or `local`; `-Profile` selects without prompting, `-Device auto|cpu|cuda` chooses the PyTorch build. `-PlanOnly` reports the asset/device/disk plan without installing or downloading. `tools/install_plan.ps1` owns this plan; setup installs exact torch/torchaudio CPU or cu128 wheels, then the remaining `requirements-lock.txt` packages. Original/online profiles download ASR + align; local also downloads translate + runtime. `tools/configure_install.py` persists first-run defaults while preserving existing API settings. `tools\download_assets.py [asr|align|translate|runtime]` downloads pinned, SHA-256-checked, resumable assets; `asr` only downloads Qwen3-ASR-1.7B. There is no linter or formatter config.
 
-## Two Python environments
+## Python environment
 
-- `.venv`: main app plus Qwen3-ASR / Qwen3-ForcedAligner (`qwen-asr`, **Transformers 4**).
-- `runtime/asr-env`: Cohere Transcribe and Parakeet ONNX (**Transformers 5**, onnxruntime-gpu pinned to CUDA 12). It's built by `tools/setup_extra.py` from `requirements-extra-lock.txt` and marked ready by `runtime/asr-env/.ready`.
-
-Never install the extras into `.venv`, because that would upgrade Transformers and break Qwen. `app.external_asr` is the only module that runs inside `asr-env`.
+`.venv` runs the main app, Qwen3-ASR-1.7B and Qwen3-ForcedAligner (`qwen-asr`, **Transformers 4**). Recognition is fixed to `models/Qwen3-ASR-1.7B`; no separate recognition environment or alternative backend is supported.
 
 ## Process architecture
 
@@ -41,8 +38,7 @@ The GUI never runs inference in-process. Every job is a child process that talks
 
 1. `Studio` builds the job and hands it to `app/job_runner.JobRunner` (`Studio.jobs`), which writes `job.json` into the job's output folder and starts `QProcess`: `.venv\Scripts\python.exe -u -m app.worker --job job.json`. The runner splits stdout into JSON lines, appends the child's stderr to `run.log`, remembers whether a terminal event (`done`, `error`, `export_done`, `export_cancelled`) arrived, and emits `event`, `ended(unexpected)` and `failedToStart`. `Studio.handle_event` dispatches on `type`: `progress`, `checkpoint`, `translation_update`, `api_diagnostic`, `done`, `error` (other types, such as `backend`, are ignored). Tests swap the child program by patching `app.job_runner.QProcess`.
 2. `app/worker.py` wraps `process()` in `contextlib.redirect_stdout(sys.stderr)` so library prints can't corrupt the event stream; events go through `worker.event()` → `EVENT_STREAM`. Keep that separation when adding output.
-3. For Cohere/Parakeet, `app/asr_process.py` spawns `runtime/asr-env` Python with `-m app.external_asr`, which uses the same JSON-line protocol (`backend`, `record`, `done`, `error`). Cleanup uses `taskkill /T /F`, so cancelling kills the whole tree.
-4. Video export is a separate child: `-m app.video_export --job <work>/job.json`. It runs Qt offscreen, emits `export_done` / `export_cancelled` (handled by the same `handle_event`), logs to `video-export.log`, and is cancelled by creating a `cancel` file in its work dir. `JobRunner.start_export` creates that work dir beside the target and removes it (keeping `ffmpeg.log` in `video-export.log`) when the child ends.
+3. Video export is a separate child: `-m app.video_export --job <work>/job.json`. It runs Qt offscreen, emits `export_done` / `export_cancelled` (handled by the same `handle_event`), logs to `video-export.log`, and is cancelled by creating a `cancel` file in its work dir. `JobRunner.start_export` creates that work dir beside the target and removes it (keeping `ffmpeg.log` in `video-export.log`) when the child ends.
 
 ## Recognition pipeline and resume cache
 
@@ -52,7 +48,7 @@ The GUI never runs inference in-process. Every job is a child process that talks
 - `resegment_only` rebuilds cues from cached alignments without touching any model. It refuses to run if the source text was hand-edited.
 - **`run_pipeline` gets its dependencies through `hooks`, which is the `app.worker` module itself** (`h.extract_audio`, `h.speech_chunks`, `h.read_span`, `h.load_options`, `h.event`, `h.model_issue`, …). Tests stub stages by monkeypatching attributes on `app.worker`. To add a new pipeline dependency, import it into `worker.py` and call it via `h.` so it stays mockable.
 
-`config.asr_backend(path)` chooses `qwen` / `cohere` / `parakeet` from `config.json`'s `model_type` or the folder name. Every backend's timestamps come from Qwen3-ForcedAligner.
+`config.model_paths` always resolves `asr_model` to the local Qwen3-ASR-1.7B path, including old settings, imported projects and worker jobs. Alignment and translation paths remain configurable. A cache fingerprint from another recognition model is rejected with a regeneration message; never rewrite its fingerprint to reuse incompatible recognition results.
 
 ## Project file and state
 

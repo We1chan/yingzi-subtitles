@@ -7,8 +7,7 @@ from PySide6.QtCore import QProcess, Qt
 from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QFileDialog, QPlainTextEdit, QDialogButtonBox)
 
-from .config import (ROOT, MODELS, MODEL_DEFAULTS, ASR_PRESETS, model_paths,
-    model_issue, server_path, asr_backend, asr_description, extra_runtime_ready)
+from .config import ROOT, MODELS, MODEL_DEFAULTS, model_paths, model_issue, server_path
 from .media import CREATE_NO_WINDOW
 from .widgets import ComboBox as QComboBox
 
@@ -16,46 +15,53 @@ from .widgets import ComboBox as QComboBox
 class ModelDialog(QDialog):
     def __init__(self, selection, parent=None):
         super().__init__(parent)
-        self.setWindowTitle('选择本地模型')
+        self.setWindowTitle('准备字幕功能')
         self.resize(730, 580)
         self.process = None
         self.selectors, self.details, self.browse_buttons = {}, {}, []
+        local_translation = not hasattr(parent, 'translation_required') or (parent.translation_required() and parent.translation_backend.currentData() == 'local')
+        self.required = {'asr_model', 'align_model', 'translation_model'} if local_translation else {'asr_model', 'align_model'}
         layout = QVBoxLayout(self)
         layout.setSpacing(12)
-        intro = QLabel('识别支持 Qwen3-ASR、Cohere Transcribe 和 Parakeet v2；翻译支持聊天型 GGUF。\n模型在本机运行。可浏览本地文件，或下载选中的内置模型及运行环境。')
+        intro = QLabel('听写固定使用 Qwen3-ASR-1.7B，支持中文、日语和英语。\n点击「下载缺少的功能」，准备好后「保存并返回」。')
         intro.setWordWrap(True)
         layout.addWidget(intro)
+        if not local_translation:
+            needed = QLabel('本次只需准备听写和时间匹配功能，下载按钮会跳过本地中文翻译组件。')
+            needed.setWordWrap(True)
+            layout.addWidget(needed)
         paths = model_paths(selection)
-        for key, title in [('asr_model', '语音识别模型'), ('align_model', '时间轴对齐模型'), ('translation_model', '日语 / 英语 → 简体中文翻译模型')]:
+        for key, title in [('asr_model', '听写视频里的说话内容'), ('align_model', '让字幕跟上说话时间'), ('translation_model', '把日语 / 英语翻译成中文')]:
             layout.addWidget(QLabel(title))
             row = QHBoxLayout()
-            combo = QComboBox()
-            combo.setMinimumWidth(300)
-            candidates = [MODEL_DEFAULTS[key]]
             if key == 'asr_model':
-                candidates.extend(MODELS / name for name in ASR_PRESETS)
-            if key == 'translation_model':
-                candidates.extend(sorted(MODELS.glob('*.gguf')))
+                row.addWidget(QLabel('Qwen3-ASR-1.7B（固定）'))
             else:
-                candidates.extend(path for path in sorted(MODELS.iterdir()) if path.is_dir() and not model_issue(path, key))
-            candidates.append(paths[key])
-            self.selectors[key] = combo
-            for candidate in candidates:
-                self.add_path(key, candidate)
-            combo.setCurrentIndex(combo.findData(str(paths[key])))
-            row.addWidget(combo, 1)
-            browse = QPushButton('浏览文件…' if key == 'translation_model' else '浏览目录…')
-            browse.clicked.connect(lambda checked=False, kind=key: self.browse(kind))
-            row.addWidget(browse)
-            self.browse_buttons.append(browse)
+                combo = QComboBox()
+                combo.setMinimumWidth(300)
+                candidates = [MODEL_DEFAULTS[key]]
+                if key == 'translation_model':
+                    candidates.extend(sorted(MODELS.glob('*.gguf')))
+                else:
+                    candidates.extend(path for path in sorted(MODELS.iterdir()) if path.is_dir() and not model_issue(path, key))
+                candidates.append(paths[key])
+                self.selectors[key] = combo
+                for candidate in candidates:
+                    self.add_path(key, candidate)
+                combo.setCurrentIndex(combo.findData(str(paths[key])))
+                row.addWidget(combo, 1)
+                browse = QPushButton('浏览文件…' if key == 'translation_model' else '浏览目录…')
+                browse.clicked.connect(lambda checked=False, kind=key: self.browse(kind))
+                row.addWidget(browse)
+                self.browse_buttons.append(browse)
+                combo.currentIndexChanged.connect(self.refresh)
             layout.addLayout(row)
             detail = QLabel()
             detail.setWordWrap(True)
             detail.setStyleSheet('font-size: 12px;')
             self.details[key] = detail
             layout.addWidget(detail)
-            combo.currentIndexChanged.connect(self.refresh)
-        self.download = QPushButton('下载缺失的内置模型')
+        self.download = QPushButton('下载缺少的功能')
         self.download.clicked.connect(self.download_missing)
         layout.addWidget(self.download)
         self.log = QPlainTextEdit()
@@ -64,7 +70,7 @@ class ModelDialog(QDialog):
         self.log.setPlaceholderText('首次下载需要联网。GGUF 模型还需适配当前 llama.cpp 引擎；建议先用短片验证。')
         layout.addWidget(self.log)
         self.buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
-        self.buttons.button(QDialogButtonBox.Save).setText('保存选择')
+        self.buttons.button(QDialogButtonBox.Save).setText('保存并返回')
         self.buttons.button(QDialogButtonBox.Cancel).setText('取消')
         self.buttons.accepted.connect(self.accept)
         self.buttons.rejected.connect(self.reject)
@@ -81,9 +87,12 @@ class ModelDialog(QDialog):
         return combo.findData(value)
 
     def selection(self):
-        return {key: combo.currentData() for key, combo in self.selectors.items()}
+        return {key: str(path) for key, path in model_paths(
+            {key: combo.currentData() for key, combo in self.selectors.items()}).items()}
 
     def browse(self, key):
+        if key == 'asr_model':
+            return
         if key == 'translation_model':
             filename, _ = QFileDialog.getOpenFileName(self, '选择聊天型 GGUF 翻译模型', str(MODELS), 'GGUF 模型 (*.gguf)')
         else:
@@ -95,26 +104,20 @@ class ModelDialog(QDialog):
     def download_tasks(self):
         tasks = []
         for key, path in model_paths(self.selection()).items():
+            if key not in self.required:
+                continue
             if not model_issue(path, key):
                 continue
-            if key == 'asr_model':
-                for name, task in ASR_PRESETS.items():
-                    if path == (MODELS / name).resolve():
-                        tasks.append(task)
-            elif path == MODEL_DEFAULTS[key].resolve():
-                tasks.append('align' if key == 'align_model' else 'translate')
-        if not server_path().is_file():
+            if path == MODEL_DEFAULTS[key].resolve():
+                tasks.append({'asr_model': 'asr', 'align_model': 'align', 'translation_model': 'translate'}[key])
+        if 'translation_model' in self.required and not server_path().is_file():
             tasks.append('runtime')
-        if asr_backend(model_paths(self.selection())['asr_model']) != 'qwen' and not extra_runtime_ready():
-            tasks.append('extra-runtime')
         return tasks
 
     def refresh(self):
         for key, path in model_paths(self.selection()).items():
             issue = model_issue(path, key)
-            description = (asr_description(path) + '\n') if key == 'asr_model' else ''
-            if key == 'asr_model' and asr_backend(path) != 'qwen' and not extra_runtime_ready():
-                issue = (issue + '；' if issue else '') + '需下载扩展识别引擎'
+            description = '中 / 日 / 英，可自动检测语言，支持术语提示\n' if key == 'asr_model' else ''
             self.details[key].setText(f'{path}\n' + description + (issue or '已就绪'))
             self.details[key].setStyleSheet('font-size: 12px; color: ' + ('#B54B43;' if issue else '#B23813;'))
         self.download.setEnabled(bool(self.download_tasks()) and not self.downloading())

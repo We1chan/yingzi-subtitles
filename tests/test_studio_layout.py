@@ -232,7 +232,7 @@ def test_network_badge_distinguishes_local_and_online_translation(window):
 def test_generation_options_hide_unused_translation_controls(window):
     window.mode.setCurrentIndex(window.mode.findData(False))
     assert window.translation_group.isHidden()
-    assert window.start_button.text() == '生成原文字幕'
+    assert window.start_button.text() == '开始生成字幕'
     window.mode.setCurrentIndex(window.mode.findData(True))
     assert not window.translation_group.isHidden()
-    assert window.start_button.text() == '生成双语字幕'
+    assert window.start_button.text() == '开始生成字幕'

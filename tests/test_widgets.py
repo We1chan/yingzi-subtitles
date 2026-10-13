@@ -64,6 +64,8 @@ def test_style_numbers_and_font_scroll_without_changes(application):
     window.settings_tabs.setCurrentIndex(1)
     application.processEvents()
     panel = window.style_panel
+    panel.sections['字体、大小与颜色'][0].setChecked(True)
+    application.processEvents()
     number = panel.controls['font_size']
     for control in (number, panel.font):
         control.setFocus()

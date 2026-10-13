@@ -10,7 +10,7 @@ import traceback
 import threading
 from pathlib import Path
 
-from .config import CACHE, ROOT, model_paths, model_issue, readiness, asr_backend, asr_language_issue, extra_runtime_ready
+from .config import CACHE, ROOT, model_paths, model_issue, readiness
 from .media import extract_audio, read_span, speech_chunks
 from .subtitles import atomic_write, load_project, render, save_project, validate, needs_translation, require_project_path
 from .job_metrics import RequestMetrics

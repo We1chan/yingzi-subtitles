@@ -181,7 +181,7 @@ def normalized_chars(text):
     return ''.join(result), offsets
 
 
-def aligned_cues(text, items, offset=0.0, duration=None, max_chars=30, max_seconds=6.0, language='', segmentation_mode='fixed'):
+def aligned_cues(text, items, offset=0.0, duration=None, max_chars=30, max_seconds=None, language='', segmentation_mode='fixed'):
     """Preserve original spelling/punctuation; split only at aligned word boundaries."""
     if not text.strip():
         return []
@@ -206,9 +206,13 @@ def aligned_cues(text, items, offset=0.0, duration=None, max_chars=30, max_secon
     if not boundaries or cursor != len(normalized):
         raise ValueError('时间轴未覆盖全部识别文本，未生成不完整字幕。')
     smart = segmentation_mode == 'smart'
+    # In smart mode a complete sentence may last eight seconds; split long sentences
+    # into six-second clauses. An explicit duration limit remains strict.
+    sentence_seconds = 8.0 if smart and max_seconds is None else max_seconds
+    max_seconds = 6.0 if max_seconds is None else max_seconds
     if smart:
         from .segmentation import smart_endpoints
-        endpoints = iter(smart_endpoints(text, boundaries, language, sentence_end, max_seconds))
+        endpoints = iter(smart_endpoints(text, boundaries, language, sentence_end, max_seconds, sentence_seconds))
     cues = []
     first, char_start = 0, 0
     while first < len(boundaries):

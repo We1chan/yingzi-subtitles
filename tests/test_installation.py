@@ -55,7 +55,7 @@ def test_original_cpu_installation_defaults_and_project_options_override(monkeyp
     window = Studio()
     try:
         assert window.mode.currentData() is False and window.device.currentData() == 'cpu'
-        assert '本地模型已就绪' in window.model_status.text()
+        assert '识别功能已准备好' in window.model_status.text()
         project = tmp_path / 'existing.yingziproj'
         save_project(project, tmp_path / 'missing.mp4', [Cue(0, 1, 'Existing')], {'bilingual': True, 'device': 'auto'})
         window.load_saved_project(project)

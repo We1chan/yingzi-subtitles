@@ -19,7 +19,10 @@ CLAUSE_STARTS = {
 }
 ENGLISH_DEPENDENT = set(('a an the this that these those my your his her its our their '
     'to of in on at by for from with into over under not very more most and or '
-    'if because although would could should must can will shall').split())
+    'if because although would could should must can will shall '
+    'is are was were be been being have has had do does did '
+    'each every any some all both either neither many much few several multiple '
+    'i you he she it we they').split())
 JAPANESE_SUFFIXES = {'は', 'が', 'を', 'に', 'へ', 'と', 'も', 'で', 'の', 'ね', 'よ',
     'から', 'まで', 'より', 'だけ', 'って', 'です', 'ます', 'た', 'て', 'ない', 'たい', 'でした', 'ません'}
 LATIN_WORD = re.compile(r"[A-Za-z0-9Ａ-Ｚａ-ｚ０-９]+(?:[.'’:/_%％-][A-Za-z0-9Ａ-Ｚａ-ｚ０-９]+)*")
@@ -32,7 +35,7 @@ def display_length(text, english):
     return sum(1 if unicodedata.east_asian_width(char) in ('W', 'F') else .5 for char in text)
 
 
-def smart_endpoints(text, boundaries, language, sentence_end, max_seconds):
+def smart_endpoints(text, boundaries, language, sentence_end, max_seconds, sentence_seconds=None):
     """Return inclusive aligned-token indices, optimizing each continuous utterance."""
     if not boundaries:
         return []
@@ -55,47 +58,62 @@ def smart_endpoints(text, boundaries, language, sentence_end, max_seconds):
             for match in re.finditer(re.escape(phrase), text):
                 protect(match.start(), match.end())
 
-    # Pauses always separate utterances, including short replies and speaker turns.
-    pauses = [i for i in range(len(boundaries) - 1)
-              if boundaries[i + 1][1] - boundaries[i][2] >= .65]
-    block_ends = pauses + [len(boundaries) - 1]
-    costs, skipped = [], [0.0]
+    # Sentence endings are firm boundaries; breathing pauses inside a sentence are not.
+    block_ends, costs, clauses = [], [], []
     for i, cut in enumerate(positions):
-        left, right = text[:cut].rstrip(), text[cut:].lstrip()
+        left, right = text[max(0, cut - 256):cut].rstrip(), text[cut:cut + 32].lstrip()
         ending = sentence_end(left, language)
         gap = boundaries[i + 1][1] - boundaries[i][2] if i + 1 < len(boundaries) else 0
         stripped = left.rstrip('"\'”’）)]」』】》〉')
         comma = stripped.endswith(('、', '，', ',', ';', '；', ':', '：'))
+        token = pieces[i].lower().strip('"\'“”‘’()[]')
+        next_piece = pieces[i + 1].rstrip('。！？!?、，,') if i + 1 < len(pieces) else ''
+        dependent = ((english and token.rstrip('.,;:!?') in ENGLISH_DEPENDENT)
+                     or (language == 'Chinese' and stripped.endswith(tuple('的地得把被将在向对从为给让不很更最这那每')))
+                     or (language == 'Japanese' and (next_piece in JAPANESE_SUFFIXES or token in {'は', 'が', 'を', 'に', 'へ', 'の', 'と'})))
+        if i < len(boundaries) - 1 and (gap >= 2 or (ending and i not in blocked)
+                                      or (gap >= 1 and i not in blocked and not dependent)):
+            block_ends.append(i)
         cost = 0 if ending else 1.5 if comma else 2 if gap >= .3 else 4 if gap >= .15 else 8
-        if right.lower().startswith(CLAUSE_STARTS.get(language, ())):
+        clause = comma or right.lower().startswith(CLAUSE_STARTS.get(language, ()))
+        if clause:
             cost = min(cost, 2)
         if not ending and not comma:
-            token = pieces[i].lower().strip('"\'“”‘’()[]')
             if english and (token in ENGLISH_DEPENDENT or token.rstrip('.') in {'dr', 'mr', 'mrs', 'ms', 'prof'}):
                 cost += 12
             if language == 'Chinese' and stripped.endswith(tuple('的地得把被将在向对从为给让不很更最这那每')):
                 cost += 9
             if language == 'Japanese':
-                next_piece = pieces[i + 1].rstrip('。！？!?、，,') if i + 1 < len(pieces) else ''
                 if next_piece in JAPANESE_SUFFIXES:
                     cost += 16
                 if token in {'は', 'が', 'を', 'に', 'へ', 'の', 'と'}:
                     cost += 6
                 if stripped.endswith(('です', 'ます', 'でした', 'ません', 'だった', 'ください')) and next_piece not in JAPANESE_SUFFIXES:
                     cost = min(cost, 2)
+                    clause = True
         costs.append(cost)
-        skipped.append(skipped[-1] + (6 if ending else 0))
+        clauses.append(clause)
+    block_ends.append(len(boundaries) - 1)
 
     result, block_start = [], 0
     for block_end in block_ends:
+        begin_char = positions[block_start - 1] if block_start else 0
+        section = text[begin_char:positions[block_end]].strip()
+        duration = boundaries[block_end][2] - boundaries[block_start][1]
+        seconds = (sentence_seconds or max_seconds) if sentence_end(section, language) else max_seconds
+        if display_length(section, english) <= limit and duration <= seconds:
+            result.append(block_end)
+            block_start = block_end + 1
+            continue
         # A protected word/number can only be split at an actual long pause.
         endpoints = [i for i in range(block_start, block_end + 1) if i not in blocked or i == block_end]
+        has_clauses = any(clauses[i] for i in endpoints[:-1])
         best = {block_start: 0.0}
-        previous = {}
+        previous, starts = {}, [block_start]
         for endpoint_index, last in enumerate(endpoints):
             stop = last + 1
             best[stop] = math.inf
-            for start in sorted((value for value in best if value < stop), reverse=True):
+            for start in reversed(starts):
                 begin_char = positions[start - 1] if start else 0
                 section = text[begin_char:positions[last]].strip()
                 length = display_length(section, english)
@@ -107,13 +125,13 @@ def smart_endpoints(text, boundaries, language, sentence_end, max_seconds):
                 cost = 3 + 2 * (length / target) ** 2
                 cost += 12 * max(0, 1 - duration) ** 2 + .6 * max(0, minimum - length)
                 cost += max(0, duration - min(5, max_seconds)) ** 2
-                cost += skipped[last] - skipped[start]
                 if last != block_end:
-                    cost += costs[last]
+                    cost += costs[last] + (8 if has_clauses and not clauses[last] else 0)
                 if best[start] + cost < best[stop]:
                     best[stop], previous[stop] = best[start] + cost, start
             if stop not in previous:
                 raise ValueError('无法为识别结果生成有效的智能分段。')
+            starts.append(stop)
         stop, ends = block_end + 1, []
         while stop != block_start:
             ends.append(stop - 1)

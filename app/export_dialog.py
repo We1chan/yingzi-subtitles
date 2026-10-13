@@ -2,11 +2,12 @@
 from pathlib import Path
 
 from PySide6.QtCore import QProcess, QTimer, Qt
-from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel, QFormLayout,
+from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel, QFormLayout, QPushButton,
                                QDialogButtonBox, QWidget, QScrollArea)
 
 from .widgets import ComboBox, SpinBox
 from .media import ffmpeg
+from .subtitles import timestamp
 from .export_settings import (DEFAULTS, normalize_settings, parse_media_info, video_bitrate,
                               estimated_size, format_size, audio_plan)
 
@@ -25,17 +26,36 @@ class ExportDialog(QDialog):
         self.video = Path(video)
         self.info = None
         self.controls = {}
-        self.setWindowTitle('合并字幕并导出视频')
-        self.resize(700, 730)
-        self.setMinimumSize(620, 520)
+        try:
+            self.initial = normalize_settings(options)
+        except (ValueError, TypeError):
+            self.initial = DEFAULTS.copy()
+        self.setWindowTitle('保存带字幕的视频')
+        self.resize(640, 480)
+        self.setMinimumSize(620, 420)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 18, 20, 18)
         layout.setSpacing(12)
-        layout.addWidget(note('导出字幕视频', 'panelTitle'))
-        layout.addWidget(note(f'{content} · MP4\n字幕按预览样式烧录，视频需要重新编码。'))
-        self.source_label = note('正在读取源文件码率与音轨…', 'notice')
+        layout.addWidget(note('保存带字幕的视频', 'panelTitle'))
+        layout.addWidget(note(f'{content} · 保存为 MP4，打开视频就能看到字幕。'))
+        self.simple_note = note('默认保留原画面大小和声音，一般直接选择保存位置即可。' if self.initial == DEFAULTS else
+                                '已沿用这个工程上次的导出设置。需要调整时展开「更多导出设置」。')
+        layout.addWidget(self.simple_note)
+        self.source_label = note('正在读取视频信息，读完后就能保存…', 'notice')
         layout.addWidget(self.source_label)
-        scroll = QScrollArea()
+        size_row = QHBoxLayout()
+        size_row.addWidget(note('画面大小'))
+        self.resolution_choice = ComboBox()
+        for title, value in [('保持原视频大小（推荐）', 'original'), ('最高 1080p', '1080'), ('最高 720p', '720')]:
+            self.resolution_choice.addItem(title, value)
+        self.resolution_choice.setCurrentIndex(self.resolution_choice.findData(self.initial['resolution']))
+        size_row.addWidget(self.resolution_choice, 1)
+        layout.addLayout(size_row)
+        self.advanced_toggle = QPushButton('＋  更多导出设置（可选）')
+        self.advanced_toggle.setObjectName('disclosure')
+        self.advanced_toggle.setCheckable(True)
+        layout.addWidget(self.advanced_toggle)
+        scroll = self.advanced_settings = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         body = QWidget()
@@ -84,21 +104,19 @@ class ExportDialog(QDialog):
         video_box.addWidget(note('H.265 需要播放器支持。显卡不可用时自动回退同一格式的 CPU 编码。'))
         video_box.addStretch()
         scroll.setWidget(body)
+        scroll.hide()
         layout.addWidget(scroll, 1)
         self.estimate_label = note('', 'notice')
         layout.addWidget(self.estimate_label)
         self.buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
         self.save_button = self.buttons.button(QDialogButtonBox.Save)
-        self.save_button.setText('选择保存位置…')
+        self.save_button.setText('选择保存位置并导出…')
+        self.save_button.setObjectName('primary')
         self.buttons.button(QDialogButtonBox.Cancel).setText('取消')
         self.save_button.setEnabled(False)
         self.buttons.accepted.connect(self.accept)
         self.buttons.rejected.connect(self.reject)
         layout.addWidget(self.buttons)
-        try:
-            self.initial = normalize_settings(options)
-        except (ValueError, TypeError):
-            self.initial = DEFAULTS.copy()
         self.current_track = current_track
         for key, control in self.controls.items():
             if key == 'video_bitrate':
@@ -107,7 +125,12 @@ class ExportDialog(QDialog):
             else:
                 control.setCurrentIndex(max(0, control.findData(self.initial[key])))
                 control.currentIndexChanged.connect(self.refresh)
+        self.resolution_choice.currentIndexChanged.connect(lambda: self.controls['resolution'].setCurrentIndex(
+            self.controls['resolution'].findData(self.resolution_choice.currentData())))
+        self.advanced_toggle.toggled.connect(self.toggle_advanced)
+        self.advanced_toggle.setChecked(self.initial != DEFAULTS)
         self.refresh()
+        self._probe_stopped = False
         self.probe = QProcess(self)
         self.probe.finished.connect(self.probe_finished)
         self.probe.errorOccurred.connect(self.probe_error)
@@ -117,6 +140,11 @@ class ExportDialog(QDialog):
         self.probe.start(ffmpeg(), ['-hide_banner', '-nostdin', '-i', str(self.video)])
         self.probe_timer.start(20000)
         self.finished.connect(self.stop_probe)
+
+    def toggle_advanced(self, expanded):
+        self.advanced_settings.setVisible(expanded)
+        self.advanced_toggle.setText('－  收起导出设置' if expanded else '＋  更多导出设置（可选）')
+        self.resize(self.width(), 740 if expanded else 480)
 
     def add_choice(self, form, key, title, items):
         control = ComboBox()
@@ -130,6 +158,8 @@ class ExportDialog(QDialog):
                                    for key, control in self.controls.items()})
 
     def probe_finished(self, *args):
+        if self._probe_stopped:
+            return
         self.probe_timer.stop()
         try:
             self.set_source_info(parse_media_info(bytes(self.probe.readAllStandardError()).decode('utf-8', errors='replace'), self.video.stat().st_size))
@@ -143,7 +173,9 @@ class ExportDialog(QDialog):
             self.source_label.setText('无法读取视频信息，请确认文件存在且包含可解码的视频画面。')
         else:
             rate = f"{video['bitrate']:g} kbps" if video['bitrate'] else '未标注（按文件体积估算）'
-            self.source_label.setText(f"源文件 {format_size(info['size_bytes'])} · {info['duration'] / 60:.1f} 分钟\n{video['codec'].upper()} · 视频码率 {rate} · {len(info['audio'])} 条音轨")
+            length = timestamp(info['duration']).split(',')[0] if info['duration'] else '未知'
+            self.source_label.setText(f"原视频 {format_size(info['size_bytes'])} · 时长 {length} · {len(info['audio'])} 条声音轨道")
+            self.source_label.setToolTip(f"{video['codec'].upper()} · 视频码率 {rate}")
         track = self.controls['audio_track']
         track.blockSignals(True)
         track.clear()
@@ -156,16 +188,19 @@ class ExportDialog(QDialog):
         track.blockSignals(False)
         self.refresh()
 
-    def probe_error(self, *args):
+    def probe_error(self, *args, force=False):
+        if self._probe_stopped and not force:
+            return
         self.probe_timer.stop()
         self.source_label.setText('读取源文件失败，请关闭后重新选择可读取的视频。')
         self.save_button.setEnabled(False)
 
     def probe_timeout(self):
         self.stop_probe()
-        self.probe_error()
+        self.probe_error(force=True)
 
     def stop_probe(self, *args):
+        self._probe_stopped = True
         self.probe_timer.stop()
         if self.probe.state() != QProcess.NotRunning:
             self.probe.kill()
@@ -173,6 +208,9 @@ class ExportDialog(QDialog):
 
     def refresh(self, *args):
         settings = self.settings()
+        self.resolution_choice.blockSignals(True)
+        self.resolution_choice.setCurrentIndex(self.resolution_choice.findData(settings['resolution']))
+        self.resolution_choice.blockSignals(False)
         self.video_form.setRowVisible(self.bitrate, settings['rate_mode'] == 'bitrate')
         self.video_form.setRowVisible(self.controls['crf'], settings['rate_mode'] == 'quality')
         mode = settings['audio_mode']
@@ -197,14 +235,13 @@ class ExportDialog(QDialog):
             if settings['rate_mode'] == 'quality':
                 message = '恒定画质不限制体积，成片可能明显大于源文件。'
             else:
-                message = f'目标视频码率 {rate} kbps · '
-                message += f'预计 {format_size(size)}' if size is not None else '音轨码率或时长未知，无法预估总体积'
-                message += '\n按平均码率估算，实际体积会随画面、音轨时长及封装开销浮动。'
+                message = f'预计保存后约 {format_size(size)}' if size is not None else '暂时无法估算成品大小，可以继续保存。'
+                message += '\n实际文件大小可能略有不同。'
                 if size is not None and size > self.info['size_bytes'] * 1.2:
                     message += '\n当前设置预计大于源文件，可降低视频或音频码率。'
-            if settings['rate_mode'] == 'source':
-                message += '\n跟随源码率不保证相同画质；压缩过低时可提高自定义码率。'
             self.estimate_label.setText(message)
+            self.estimate_label.setToolTip(f'视频目标码率：{rate} kbps' if rate else '恒定画质模式')
         except ValueError as exc:
-            self.estimate_label.setText(str(exc))
+            self.advanced_toggle.setChecked(True)
+            self.estimate_label.setText(str(exc) + '\n请在上面的导出设置中调整后再保存。')
             self.save_button.setEnabled(False)

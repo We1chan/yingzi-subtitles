@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QFrame, QLabe
     QPlainTextEdit, QDialog, QGraphicsPixmapItem, QGraphicsItem,
     QFormLayout, QDialogButtonBox, QCheckBox, QMenu, QStackedWidget, QInputDialog, QAbstractItemDelegate)
 
-from .config import ROOT, CACHE, PROJECTS, LOGS, readiness, load_model_selection, save_model_selection, MODEL_DEFAULTS, asr_language_issue, asr_backend
+from .config import ROOT, CACHE, PROJECTS, LOGS, readiness, load_model_selection, save_model_selection, model_paths
 from .project_library import ProjectLibrary
 from .project_home import ProjectHome, NewProjectDialog
 from .project_session import ProjectSession
@@ -31,7 +31,8 @@ from .widgets import ComboBox as QComboBox, DoubleSpinBox
 from .pipeline import cache_ready
 from .editing import EditHistory, merge_cues, split_cue, quality_issues
 from .preview_audio import PreviewAudio, PreviewAudioDialog
-from .subtitle_import import input_kind, read_srt, MEDIA_FILTER
+from .subtitle_import import input_kind, read_srt, MEDIA_FILTER, AUDIO_SUFFIXES
+from .workflow import next_step
 
 
 from .theme import STYLE
@@ -304,6 +305,7 @@ class Studio(QMainWindow):
         self.setCentralWidget(self.screen_stack)
         self.project_home.openRequested.connect(self.open_library_project)
         self.project_home.newRequested.connect(self.new_project)
+        self.project_home.mediaRequested.connect(self.choose_video)
         self.project_home.importRequested.connect(self.import_project_file)
         self.project_home.renameRequested.connect(self.rename_library_project)
         self.project_home.trashRequested.connect(self.trash_library_project)
@@ -448,6 +450,10 @@ class Studio(QMainWindow):
         self.advanced_settings.setVisible(expanded)
         self.advanced_toggle.setText('－  收起高级设置' if expanded else '＋  高级设置')
 
+    def toggle_edit_tools(self, expanded):
+        self.editor_tools.setVisible(expanded and bool(self.cues))
+        self.edit_tools_toggle.setText('收起修改工具' if expanded else '更多修改工具')
+
     def toggle_preview(self, collapsed):
         if collapsed:
             self._preview_sizes = self.splitter.sizes()
@@ -500,6 +506,9 @@ class Studio(QMainWindow):
             control.setVisible(has_cues)
         self.import_srt_button.setEnabled(available and not busy)
         self.import_srt_button.setVisible(available)
+        self.edit_toolbar.setVisible(has_cues)
+        self.empty_import_srt.setVisible(available and not has_cues)
+        self.empty_import_srt.setEnabled(available and not busy)
         self.welcome_import.setEnabled(not busy)
         self.open_project_button.setEnabled(not busy)
         self.save_project_button.setEnabled(bool(self.session.video or self.session.project) and not busy)
@@ -511,17 +520,28 @@ class Studio(QMainWindow):
         if self.session.project:
             self.file_name.setText(self.library.metadata(self.session.project).get('name') or self.session.project.stem)
             self.file_name.setToolTip(f'工程：{self.session.project}\n媒体：{self.session.video or "尚未导入"}')
-        self.save_project_button.setToolTip(('工程：' + str(self.session.project) + '\n自动保存 · Ctrl+S · 另存为 Ctrl+Shift+S') if self.session.project else '保存视频、字幕、样式与编码设置 · Ctrl+S')
-        bilingual = bool(self.mode.currentData())
+        self.save_project_button.setToolTip(('工程：' + str(self.session.project) + '\n自动保存字幕和编辑进度 · Ctrl+S · 第 3 步保存可播放或分享的成品') if self.session.project else '保存字幕和编辑进度 · Ctrl+S')
+        bilingual = self.translation_required()
+        self.table.setColumnHidden(4, not (bilingual and any(c.language in ('Japanese', 'English') or c.translation for c in self.cues)))
         self.translation_group.setVisible(bilingual)
+        self.chinese_note.setVisible(self.language.currentData() == 'Chinese')
         self.api_button.setVisible(self.translation_backend.currentData() == 'online')
-        self.start_button.setText('生成双语字幕' if bilingual else '生成原文字幕')
+        setup = getattr(self, '_translation_setup_needed', False)
+        self.start_button.setText('先设置中文翻译' if setup else '重新生成字幕' if has_cues else
+                                 '生成中文字幕' if self.language.currentData() == 'Chinese' else '开始生成字幕')
+        self.edit_tools_toggle.setVisible(has_cues)
+        self.editor_tools.setVisible(has_cues and self.edit_tools_toggle.isChecked())
         pending = sum(needs_translation(cue) for cue in self.cues)
         incomplete = self.session.status in ('recognizing', 'aligning')
         export_ready = has_cues and not incomplete and (self.export_mode.currentData() == 'original' or not pending)
         self.export_button.setEnabled(export_ready and not busy)
-        self.export_video_button.setEnabled(export_ready and available and not busy)
+        video = available and self.session.video.suffix.lower() not in AUDIO_SUFFIXES
+        self.export_video_button.setEnabled(export_ready and video and not busy)
         self.export_content.setText('当前内容：' + self.export_mode.currentText())
+        self.export_content_choice.blockSignals(True)
+        self.export_content_choice.setCurrentIndex(self.export_content_choice.findData(self.export_mode.currentData()))
+        self.export_content_choice.blockSignals(False)
+        self.export_content_choice.setEnabled(not busy)
         if busy:
             hint = '正在导出视频，可在下方取消' if self.jobs.kind == 'export' else '正在处理，下方显示实时进度'
         elif not media:
@@ -532,7 +552,7 @@ class Studio(QMainWindow):
             hint = '任务尚未完成 · 点击继续处理'
         elif not has_cues:
             hint = '设置已就绪后，点击「生成字幕」'
-        elif pending:
+        elif pending and (bilingual or self.export_mode.currentData() != 'original'):
             hint = f'{pending} 条译文待补全 · 可筛选查看'
         else:
             hint = f'{len(self.cues)} 条字幕 · 校对后即可导出'
@@ -547,9 +567,90 @@ class Studio(QMainWindow):
             summary = f'共 {len(self.cues)} 条字幕 · 可导出当前内容。\n建议先检查文字和时间轴。'
         if media and not available:
             summary += '\n原媒体缺失，暂时无法导出视频。'
+        elif media and not video:
+            summary += '\n当前是音频文件，请保存字幕文件。'
         self.export_summary.setText(summary)
         self.start_button.setToolTip('请先导入媒体' if not media else self.model_status.text())
+        self._guide = next_step(step=self.settings_tabs.currentIndex(), busy=busy,
+            exporting=self.jobs.kind == 'export', media=media, available=available, video=video,
+            count=len(self.cues), pending=pending if bilingual or self.export_mode.currentData() != 'original' else 0,
+            incomplete=incomplete,
+            resumable=bool(self.session.project) and incomplete and cache_ready(self.session.project),
+            ready=getattr(self, '_generation_ready', False),
+            translation_setup=setup, online=self.translation_backend.currentData() == 'online',
+            original=self.export_mode.currentData() == 'original')
+        self.guide_title.setText(self._guide.title)
+        self.guide_hint.setText(self._guide.hint)
+        self.guide_button.setText(self._guide.label)
+        self.guide_button.setEnabled(bool(self._guide.action))
+        self.guide_alternative.setText(self._guide.alternative_label)
+        self.guide_alternative.setVisible(bool(self._guide.alternative_label))
+        self.guide_alternative.setEnabled(not busy)
         self.update_editor_actions()
+
+    def run_guided_action(self, alternative=False):
+        if self.busy() or getattr(self, '_ui_busy', False):
+            return
+        self.refresh_workspace()
+        action = self._guide.alternative if alternative else self._guide.action
+        if action == 'original_generate':
+            self.mode.setCurrentIndex(self.mode.findData(False))
+            self.export_mode.setCurrentIndex(self.export_mode.findData('original'))
+            self.start_job()
+        elif action == 'original_export':
+            self.export_mode.setCurrentIndex(self.export_mode.findData('original'))
+            self.go_to_step(2)
+        elif action == 'language':
+            self.go_to_step(0)
+            self.language.setFocus()
+            self.language.showPopup()
+        else:
+            callback = {'import': self.choose_video, 'relink': self.relink_media,
+                        'models': self.choose_models, 'translation': self.setup_translation,
+                        'generate': self.start_with_guidance, 'resume': self.continue_with_guidance,
+                        'review': lambda: self.go_to_step(1), 'export_step': lambda: self.go_to_step(2),
+                        'video_export': self.export_video, 'export': self.export}.get(action)
+            if callback:
+                callback()
+
+    def translation_required(self):
+        return bool(self.mode.currentData()) and self.language.currentData() != 'Chinese'
+
+    def generation_content_changed(self):
+        if not self.session.loading:
+            self.export_mode.setCurrentIndex(self.export_mode.findData('bilingual' if self.mode.currentData() else 'original'))
+        self.refresh_models()
+        if self.table.rowCount() == len(self.cues):
+            for row in range(len(self.cues)):
+                self.update_status_cell(row)
+            self.filter_rows()
+
+    def setup_translation(self):
+        if self.translation_backend.currentData() == 'online':
+            self.configure_api()
+        else:
+            self.choose_models()
+
+    def start_with_guidance(self):
+        if not self.session.video or self.busy() or getattr(self, '_ui_busy', False):
+            return
+        if getattr(self, '_translation_setup_needed', False):
+            self.setup_translation()
+            return
+        self.start_job()
+
+    def continue_with_guidance(self):
+        if self.busy() or getattr(self, '_ui_busy', False):
+            return
+        if self.session.status not in ('recognizing', 'aligning') and any(needs_translation(c) for c in self.cues):
+            self.mode.blockSignals(True)
+            self.mode.setCurrentIndex(self.mode.findData(True))
+            self.mode.blockSignals(False)
+            self.refresh_models()
+            if self._translation_setup_needed:
+                self.setup_translation()
+                return
+        self.retry_translation()
 
     def update_editor_actions(self):
         if self.loading_table:
@@ -616,19 +717,19 @@ class Studio(QMainWindow):
         self.status.setStyleSheet('color: #B54B43;' if error else '')
 
     def refresh_models(self):
+        self.model_selection = {key: str(path) for key, path in model_paths(self.model_selection).items()}
         online = self.translation_backend.currentData() == 'online'
         state = readiness({**self.model_selection, 'translation_backend': self.translation_backend.currentData()})
-        if not self.mode.currentData():
+        if not self.translation_required():
             state = {name: ready for name, ready in state.items() if name not in ('字幕翻译', '翻译引擎')}
         count = sum(state.values())
         name = Path(self.model_selection['asr_model']).name
-        issue = asr_language_issue(self.model_selection['asr_model'], self.language.currentData())
-        self.model_status.setText(f'{name}\n' + (issue or ('●  本地模型已就绪' if count == len(state) else f'模型准备中：{count} / {len(state)} 项就绪')))
-        if online and self.mode.currentData():
+        self.model_status.setText('●  识别功能已准备好' if count == len(state) else f'需要准备功能：{count} / {len(state)} 项就绪')
+        if online and self.translation_required():
             settings = load_api_settings()
-            self.model_status.setText((issue or name) + '\n在线翻译：' + (api_issue() or settings['model']))
-        self.translation_note.setText('本地识别 · 在线翻译' if online else '本地识别 · 本地翻译')
-        uses_api = online and (self.mode.currentData() or self.active_online_translation)
+            self.model_status.setText('●  识别与翻译已准备好' if count == len(state) else '中文翻译尚未设置好')
+        self.translation_note.setText('识别在本机完成；翻译使用你设置的在线服务。' if online else '翻译功能下载好后，可在本机离线使用。')
+        uses_api = online and (self.translation_required() or self.active_online_translation)
         self.network_badge.setText('●  字幕文本将发送至在线 API' if uses_api else '●  完全本地处理')
         badge = 'onlineBadge' if uses_api else 'localBadge'
         if self.network_badge.objectName() != badge:
@@ -636,27 +737,31 @@ class Studio(QMainWindow):
             self.network_badge.style().unpolish(self.network_badge)
             self.network_badge.style().polish(self.network_badge)
         self.api_button.setEnabled(not self.busy())
-        self.model_status.setToolTip('\n'.join(f'{name}：' + ('已就绪' if ready else '待下载') for name, ready in state.items()))
-        if online and self.mode.currentData():
+        self.model_status.setToolTip(name + '\n' + '\n'.join(f'{name}：' + ('已就绪' if ready else '待准备') for name, ready in state.items()))
+        if online and self.translation_required():
             self.model_status.setToolTip(settings['base_url'] + f'\n在线翻译：每组最多 {settings["batch_size"]} 条字幕，可在 API 设置中调整。\n' + self.model_status.toolTip())
         busy = self.busy() or getattr(self, '_ui_busy', False)
         media = self.session.video is not None and self.session.video.is_file()
-        models = state['语音识别'] and state['时间轴对齐'] and state.get('扩展识别引擎', True)
-        self.start_button.setEnabled(media and not busy and models and not issue)
+        models = state['语音识别'] and state['时间轴对齐']
+        self._generation_ready = models
+        self._translation_setup_needed = self.translation_required() and not (state.get('字幕翻译', True) and state.get('翻译引擎', True))
+        self.start_button.setEnabled(media and not busy and models)
         # A disabled primary action states the one thing still missing.
-        if busy or self.start_button.isEnabled():
+        if busy:
             reason = ''
         elif self.session.video is None:
             reason = '导入视频或音频后即可开始生成'
         elif not media:
             reason = '原媒体已移动或删除，恢复后才能重新生成'
-        elif issue:
-            reason = '请更改「媒体语言」，或在「管理模型」中切换识别模型'
+        elif self._translation_setup_needed:
+            reason = '中文翻译尚未准备好。先完成设置，或点击上方「先生成原文字幕」。'
+        elif self.start_button.isEnabled():
+            reason = ''
         else:
             reason = '识别或时间轴模型未就绪 · 点击「管理模型」下载或选择'
         self.start_hint.setText(reason)
-        self.context.setPlaceholderText('可选：人名、地名、专业词汇' if asr_backend(self.model_selection['asr_model']) == 'qwen' else '当前识别模型不支持术语提示')
-        self.context.setEnabled(not self.busy() and asr_backend(self.model_selection['asr_model']) == 'qwen')
+        self.context.setPlaceholderText('可选：人名、地名、专业词汇')
+        self.context.setEnabled(not self.busy())
         self.refresh_workspace()
 
     def translation_backend_changed(self):
@@ -1014,10 +1119,17 @@ class Studio(QMainWindow):
 
     STATUS_COLORS = {'待重试': '#B54B43', '待翻译': '#A86412', '需检查': '#C24B20', '正常': '#ADA59E'}
 
+    def cue_issues(self, row):
+        issues = quality_issues(self.cues[row], self.cues[row - 1] if row else None)
+        if not self.translation_required() and self.export_mode.currentData() == 'original':
+            issues = [issue for issue in issues if issue != '待翻译' and not issue.startswith('待重试：')]
+        return issues
+
     def update_status_cell(self, row):
         cue = self.cues[row]
-        issues = quality_issues(cue, self.cues[row - 1] if row else None)
-        text = '待重试' if cue.translation_error else '待翻译' if needs_translation(cue) else '需检查' if issues else '正常'
+        issues = self.cue_issues(row)
+        translation_expected = self.translation_required() or self.export_mode.currentData() != 'original'
+        text = '待重试' if cue.translation_error and translation_expected else '待翻译' if needs_translation(cue) and translation_expected else '需检查' if issues else '正常'
         item = QTableWidgetItem(text)
         item.setFlags(item.flags() & ~Qt.ItemIsEditable)
         item.setToolTip('\n'.join(issues) or '未发现规则检查问题；译文含义仍需人工校对。')
@@ -1038,7 +1150,7 @@ class Studio(QMainWindow):
         query = self.subtitle_search.text().strip().casefold()
         visible = 0
         for row, cue in enumerate(self.cues):
-            issues = quality_issues(cue, self.cues[row - 1] if row else None)
+            issues = self.cue_issues(row)
             hidden = ((mode == 1 and not needs_translation(cue)) or (mode == 2 and not issues)
                       or (mode == 3 and cue.reviewed) or (mode == 4 and not cue.reviewed)
                       or bool(query and query not in (cue.text + '\n' + cue.translation).casefold()))
@@ -1356,10 +1468,6 @@ class Studio(QMainWindow):
     def start_job(self):
         if not self.session.video or self.busy():
             return
-        issue = asr_language_issue(self.model_selection['asr_model'], self.language.currentData())
-        if issue:
-            self.notify(issue, error=True)
-            return
         if not self.session.project:
             self.create_project()
         self.save_edits()
@@ -1398,6 +1506,7 @@ class Studio(QMainWindow):
         if job.get('resume_project'):
             self.history.remember(self.cues)
         self.active_online_translation = job.get('translation_backend') == 'online' and job.get('bilingual', True)
+        self._job_translation = job.get('bilingual', True) and job.get('language') != 'Chinese' and not job.get('resegment_only')
         self.player.pause()
         self.style_save_timer.stop()
         job['project_path'] = str(self.session.project)
@@ -1414,7 +1523,14 @@ class Studio(QMainWindow):
         if kind == 'progress':
             self.progress_bar.setValue(max(self.progress_bar.value(), event['percent']))
             self.percent.setText(f'{self.progress_bar.value()}%')
-            self.notify(event['message'])
+            percent = event['percent']
+            message = ('正在保存带字幕的视频…' if self.jobs.kind == 'export' else
+                       '正在读取视频里的声音…' if percent < 15 else
+                       '正在听写视频中的说话内容…' if percent < 54 else
+                       '正在让字幕跟上说话时间…' if percent < 75 else
+                       '正在翻译成中文…' if getattr(self, '_job_translation', self.translation_required()) else '正在保存字幕…')
+            self.status.setToolTip(event['message'])
+            self.notify(message)
         elif kind == 'checkpoint':
             self.cues = self.session.checkpoint(event['project'], event.get('status', 'translating'))
             self.fill_table()
@@ -1437,19 +1553,22 @@ class Studio(QMainWindow):
             self.filter_rows()
             self.refresh_workspace()
             self.refresh_caption()
-            tokens = event.get('tokens')
             eta = event.get('eta')
-            self.metrics_label.setText(f'成功 {event["completed"]} · 待重试 {event["failed"]} · 请求 {event["requests"]} 次 · Token {tokens if tokens is not None else "服务未提供"} · 已用 {event["elapsed"]} 秒 · 预计剩余 {eta if eta is not None else "—"} 秒')
+            self.metrics_label.setText(f'已翻译 {event["completed"]} 条 · 待重试 {event["failed"]} 条 · 已用 {event["elapsed"]} 秒' +
+                                       (f' · 预计还需 {eta} 秒' if eta is not None else ''))
+            self.metrics_label.setToolTip(f'请求 {event["requests"]} 次 · Token {event.get("tokens", "服务未提供")}')
         elif kind == 'api_diagnostic':
             response = event.get('error_message') or event.get('finish_reason') or event.get('status') or '连接失败'
             retry = f' · {event["retry_in_seconds"]:g} 秒后重试' if 'retry_in_seconds' in event else ''
-            self.metrics_label.setText(f'本轮请求 {event["requests"]} 次 · Token {event["tokens"] if event["tokens"] is not None else "服务未提供"} · 最近请求 {event["seconds"]:.1f} 秒 · 返回状态 {response}{retry}')
+            self.metrics_label.setText('翻译服务暂时没有返回结果' + retry if retry else '正在等待翻译服务返回结果…')
+            self.metrics_label.setToolTip(f'请求 {event["requests"]} 次 · 最近请求 {event["seconds"]:.1f} 秒 · 返回状态 {response}')
         elif kind == 'done':
             self.cues = self.session.checkpoint(event['project'], event.get('status', 'complete'))
             self.fill_table()
             if self.cues:
                 self.go_to_step(1)
-            self.notify(f'本轮结束 · {event["failed"]} 条待重试，点击“继续翻译”补全' if event.get('failed') else f'已生成 {event["count"]} 条字幕 · 用时 {event["seconds"]:.0f} 秒 · 已保存原文、中文和双语 SRT')
+            self.notify(f'还有 {event["failed"]} 条中文字幕待补全，点击「补全中文字幕」继续。' if event.get('failed') else
+                        f'已生成 {event["count"]} 条字幕，用时 {event["seconds"]:.0f} 秒。工程已自动保存，可试听、改错，再保存成品。')
         elif kind == 'error':
             self.notify(event['message'], error=True)
             if self.jobs.kind != 'export':
@@ -1547,7 +1666,8 @@ class Studio(QMainWindow):
         self.translation_backend.blockSignals(False)
         self.style_panel.set_style(style)
         self.preview.set_style(style)
-        self.export_mode.setCurrentIndex(max(0, self.export_mode.findData(options.get('export_mode', 'bilingual'))))
+        default_export = 'original' if options.get('bilingual') is False else 'bilingual'
+        self.export_mode.setCurrentIndex(max(0, self.export_mode.findData(options.get('export_mode', default_export))))
         for combo, key in [(self.language, 'language'), (self.mode, 'bilingual'), (self.track, 'track'), (self.device, 'device')]:
             index = combo.findData(options.get(key))
             if index >= 0:
@@ -1560,8 +1680,7 @@ class Studio(QMainWindow):
         self.translation_glossary = str(options.get('translation_glossary', ''))[:6000]
         self.translation_prompt = str(options.get('translation_prompt', ''))[:6000]
         self.history = EditHistory()
-        self.model_selection = load_model_selection()
-        self.model_selection.update({key: value for key, value in options.items() if key in MODEL_DEFAULTS and isinstance(value, str) and value.strip()})
+        self.model_selection = {key: str(path) for key, path in model_paths({**load_model_selection(), **options}).items()}
         self.subtitle_search.clear()
         self.quality_filter.setCurrentIndex(0)
         self.fill_table()
@@ -1599,6 +1718,8 @@ class Studio(QMainWindow):
         if filename:
             try:
                 target = Path(filename)
+                if not target.suffix:
+                    target = target.with_suffix('.vtt' if '*.vtt' in selection else '.srt')
                 format = 'vtt' if target.suffix.lower() == '.vtt' else 'srt'
                 atomic_write(target, render(self.cues, mode, format))
                 self.notify(f'已导出：{target}')
@@ -1613,6 +1734,9 @@ class Studio(QMainWindow):
             return False
         if not self.session.video or not self.session.video.is_file():
             QMessageBox.information(self, '找不到原视频', '请将原视频放回工程记录的位置后再导出。')
+            return False
+        if self.session.video.suffix.lower() in AUDIO_SUFFIXES:
+            QMessageBox.information(self, '当前是音频文件', '音频文件可以导出字幕文件。请点击「保存字幕文件」。')
             return False
         if self.export_mode.currentData() != 'original' and any(needs_translation(cue) for cue in self.cues):
             QMessageBox.information(self, '译文尚未完成', '请继续翻译，或选择“原文字幕”后导出视频。')

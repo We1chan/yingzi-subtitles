@@ -215,7 +215,6 @@ def test_fresh_generation_keeps_named_project_and_uses_new_cache(window, tmp_pat
     (workspace / '.pipeline').mkdir(parents=True)
     save_project(project, video, [Cue(0, 1, '旧字幕')], workspace=workspace)
     window.load_saved_project(project)
-    monkeypatch.setattr('app.gui.asr_language_issue', lambda *args: '')
     jobs = []
     monkeypatch.setattr(window, 'launch', jobs.append)
     window.start_job()

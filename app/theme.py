@@ -23,6 +23,7 @@ QLabel { background: transparent; }
 #onlineBadge { color: #8A4B0F; background: #FFF1DC; padding: 5px 10px; border-radius: 6px; font-size: 11px; }
 #startHint { color: #8A6A58; font-size: 12px; }
 #card, #inspector { background: white; border: 1px solid #E6E2DD; border-radius: 10px; }
+#workflowGuide { background: #FFF8F3; border: 1px solid #F0DCCF; border-radius: 8px; }
 #panelBody { background: white; }
 #panelFooter { background: #FFFAF7; border-top: 1px solid #F0E7DF; border-bottom-left-radius: 10px; border-bottom-right-radius: 10px; }
 #notice { color: #73564A; background: #FFF4EE; border-radius: 7px; padding: 10px; font-size: 12px; }

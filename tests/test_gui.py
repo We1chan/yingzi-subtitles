@@ -51,7 +51,8 @@ def test_english_project_restores_models_and_invalidates_edited_translation(app,
     assert window.language.currentData() == 'English'
     assert window.max_chars.value() == 68
     assert window.current_options()['segmentation_mode'] == 'fixed'
-    assert window.current_options()['asr_model'] == selection['asr_model']
+    from app.config import ASR_PATH
+    assert window.current_options()['asr_model'] == str(ASR_PATH.resolve())
     window.table.item(0, 3).setText('Good morning.')
     assert window.retry.isEnabled()
     notices = []
@@ -87,20 +88,17 @@ def test_smart_segmentation_default_language_change_and_project_roundtrip(app, t
     window.close()
 
 
-def test_model_dialog_selects_presets_and_remembers_browsed_paths(app, tmp_path, monkeypatch):
+def test_model_dialog_fixes_qwen_and_remembers_translation_paths(app, tmp_path, monkeypatch):
     from app.model_dialog import ModelDialog
-    from app.config import MODELS
+    from app.config import ASR_PATH
     custom = tmp_path / '手选模型.gguf'
     custom.write_bytes(b'GGUF' + b'\x00' * 32)
-    dialog = ModelDialog({})
-    combo = dialog.selectors['asr_model']
-    index = combo.findData(str((MODELS / 'Qwen3-ASR-0.6B').resolve()))
-    assert index >= 0
-    combo.setCurrentIndex(index)
+    dialog = ModelDialog({'asr_model': str(tmp_path / 'retired-asr')})
+    assert 'asr_model' not in dialog.selectors
     monkeypatch.setattr('app.model_dialog.QFileDialog.getOpenFileName', lambda *args: (str(custom), ''))
     dialog.browse('translation_model')
     assert dialog.selection()['translation_model'] == str(custom.resolve())
-    assert dialog.selection()['asr_model'].endswith('Qwen3-ASR-0.6B')
+    assert dialog.selection()['asr_model'] == str(ASR_PATH.resolve())
     assert dialog.details['translation_model'].text().endswith('已就绪')
     dialog.close()
 
@@ -112,13 +110,13 @@ def test_model_download_process_updates_log_and_unlocks_selection(app, monkeypat
     from app.model_dialog import ModelDialog
     class DownloadProcess(QProcess):
         def start(self, program, args):
-            assert args[-1] == 'asr-small'
+            assert args[-1] == 'asr'
             super().start(sys.executable, ['-u', '-c', "import sys; sys.stdout.reconfigure(encoding='utf-8'); print('下载测试完成')"])
     monkeypatch.setattr('app.model_dialog.QProcess', DownloadProcess)
     dialog = ModelDialog({})
-    monkeypatch.setattr(dialog, 'download_tasks', lambda: ['asr-small'])
+    monkeypatch.setattr(dialog, 'download_tasks', lambda: ['asr'])
     dialog.download_missing()
-    assert not dialog.selectors['asr_model'].isEnabled()
+    assert not dialog.selectors['align_model'].isEnabled()
     loop = QEventLoop()
     dialog.process.finished.connect(loop.quit)
     timer = QTimer()
@@ -128,30 +126,22 @@ def test_model_download_process_updates_log_and_unlocks_selection(app, monkeypat
     loop.exec()
     assert not dialog.downloading()
     assert '下载测试完成' in dialog.log.toPlainText()
-    assert dialog.selectors['asr_model'].isEnabled()
+    assert dialog.selectors['align_model'].isEnabled()
     assert dialog.buttons.button(QDialogButtonBox.Save).isEnabled()
     dialog.close()
 
 
-def test_new_models_are_selectable_and_wrong_language_blocks_generation(app, tmp_path, monkeypatch):
-    from app.config import MODELS
-    from app.model_dialog import ModelDialog
-    dialog = ModelDialog({})
-    for name in ['cohere-transcribe-03-2026', 'parakeet-tdt-0.6b-v2-onnx']:
-        assert dialog.selectors['asr_model'].findData(str((MODELS / name).resolve())) >= 0
-    dialog.close()
+@pytest.mark.parametrize('language', ['', 'Chinese', 'Japanese', 'English'])
+def test_fixed_qwen_supports_auto_and_all_three_languages(app, tmp_path, monkeypatch, language):
+    from app.config import ASR_PATH
     window = Studio()
-    monkeypatch.setattr('app.gui.readiness', lambda options: {'语音识别': True, '时间轴对齐': True, '字幕翻译': True, '翻译引擎': True, '扩展识别引擎': True})
+    monkeypatch.setattr('app.gui.readiness', lambda options: {'语音识别': True, '时间轴对齐': True, '字幕翻译': True, '翻译引擎': True})
     window.session.video = tmp_path / 'video.mp4'
     window.session.video.touch()
-    window.model_selection['asr_model'] = str(MODELS / 'parakeet-tdt-0.6b-v2-onnx')
-    window.language.setCurrentIndex(window.language.findData('Japanese'))
+    window.model_selection['asr_model'] = str(tmp_path / 'retired-asr')
+    window.language.setCurrentIndex(window.language.findData(language))
     window.refresh_models()
-    assert not window.start_button.isEnabled()
-    assert '仅识别英语' in window.model_status.text()
-    window.language.setCurrentIndex(window.language.findData('English'))
     assert window.start_button.isEnabled()
-    window.model_selection['asr_model'] = str(MODELS / 'cohere-transcribe-03-2026')
-    window.language.setCurrentIndex(0)
-    assert not window.start_button.isEnabled()
+    assert window.model_selection['asr_model'] == str(ASR_PATH.resolve())
+    assert window.context.isEnabled()
     window.close()

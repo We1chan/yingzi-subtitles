@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from app import config
 
 
@@ -40,16 +42,21 @@ def test_gguf_validation_does_not_require_private_download_marker(tmp_path):
     assert config.model_issue(path, 'translation_model') == ''
 
 
-def test_settings_persist_external_paths_and_preserve_other_preferences(tmp_path, monkeypatch):
+@pytest.mark.parametrize('name', ['Qwen3-ASR-0.6B', 'cohere-transcribe-03-2026', 'parakeet-tdt-0.6b-v2-onnx', '英文模型'])
+def test_settings_force_qwen_and_preserve_other_preferences(tmp_path, monkeypatch, name):
     settings = tmp_path / 'settings.json'
     monkeypatch.setattr(config, 'SETTINGS', settings)
-    settings.write_text('{"theme":"light"}')
-    selected = {'asr_model': str(tmp_path / '英文模型'), 'translation_model': str(tmp_path / 'translate.gguf')}
+    settings.write_text(json.dumps({'theme': 'light', 'asr_model': str(tmp_path / name)}))
+    assert config.load_model_selection()['asr_model'] == str(config.ASR_PATH.resolve())
+    selected = {'asr_model': str(tmp_path / name), 'align_model': str(tmp_path / 'align'),
+                'translation_model': str(tmp_path / 'translate.gguf')}
     config.save_model_selection(selected)
     loaded = config.load_model_selection()
-    assert loaded['asr_model'] == str((tmp_path / '英文模型').resolve())
+    assert loaded['asr_model'] == str(config.ASR_PATH.resolve())
+    assert loaded['align_model'] == str((tmp_path / 'align').resolve())
     assert loaded['translation_model'] == str((tmp_path / 'translate.gguf').resolve())
     assert json.loads(settings.read_text())['theme'] == 'light'
+    assert json.loads(settings.read_text())['asr_model'] == str(config.ASR_PATH.resolve())
     settings.write_text('bad json')
     assert config.load_model_selection()['asr_model'] == str(config.ASR_PATH)
 
@@ -58,37 +65,40 @@ def test_legacy_jobs_keep_original_defaults():
     assert config.model_paths({}) == config.MODEL_DEFAULTS
 
 
-def test_cohere_snapshot_is_asr_only_and_requires_explicit_language(tmp_path):
-    path = snapshot(tmp_path / 'cohere')
-    (path / 'config.json').write_text('{"model_type":"cohere_asr"}')
-    (path / 'processor_config.json').write_text('{}')
-    assert config.asr_backend(path) == 'cohere'
-    assert config.model_issue(path, 'asr_model') == ''
+@pytest.mark.parametrize('model_type', ['cohere_asr', 'nemo-conformer-tdt', 'whisper'])
+def test_other_recognition_architectures_are_rejected(tmp_path, model_type):
+    path = snapshot(tmp_path / 'other-model')
+    (path / 'config.json').write_text(json.dumps({'model_type': model_type}))
+    assert 'Qwen3-ASR-1.7B' in config.model_issue(path, 'asr_model')
     assert config.model_issue(path, 'align_model')
-    assert config.asr_language_issue(path, '')
-    assert config.asr_language_issue(path, 'Japanese') == ''
 
 
-def test_parakeet_requires_external_onnx_weights_and_english(tmp_path):
-    path = tmp_path / 'parakeet'
-    path.mkdir()
-    (path / 'config.json').write_text('{"model_type":"nemo-conformer-tdt"}')
-    for name in ['encoder-model.onnx', 'decoder_joint-model.onnx', 'vocab.txt', 'nemo128.onnx']:
-        (path / name).write_bytes(b'asset')
-    assert 'encoder-model.onnx.data' in config.model_issue(path, 'asr_model')
-    (path / 'encoder-model.onnx.data').write_bytes(b'weights')
-    assert config.model_issue(path, 'asr_model') == ''
-    assert config.model_issue(path, 'align_model')
-    assert config.asr_language_issue(path, 'English') == ''
-    assert config.asr_language_issue(path, 'Japanese')
-    assert config.asr_language_issue(path, '')
+def test_readiness_uses_fixed_qwen_without_an_extra_environment(monkeypatch):
+    checked = {}
+    def issue(path, kind):
+        checked[kind] = path
+        return ''
+    monkeypatch.setattr(config, 'model_issue', issue)
+    state = config.readiness({'asr_model': 'models/cohere-transcribe-03-2026'})
+    assert checked['asr_model'] == config.ASR_PATH.resolve()
+    assert set(state) == {'语音识别', '时间轴对齐', '字幕翻译', '翻译引擎'}
 
 
-def test_extra_runtime_is_required_only_for_new_engines(monkeypatch):
-    monkeypatch.setattr(config, 'model_issue', lambda *args: '')
-    monkeypatch.setattr(config, 'extra_runtime_ready', lambda: False)
-    assert '扩展识别引擎' not in config.readiness({})
-    assert config.readiness({'asr_model': 'models/cohere-transcribe-03-2026'})['扩展识别引擎'] is False
+@pytest.mark.parametrize('task', ['asr-small', 'cohere', 'parakeet', 'extra-runtime'])
+def test_retired_download_tasks_are_rejected_before_any_download(monkeypatch, task):
+    from tools import download_assets
+    monkeypatch.setattr(download_assets, 'snapshot', lambda *args: pytest.fail('Unexpected download'))
+    with pytest.raises(SystemExit) as exc:
+        download_assets.main(['asr', task])
+    assert exc.value.code == 2
+
+
+def test_asr_download_only_fetches_qwen_17b(monkeypatch):
+    from tools import download_assets
+    fetched = []
+    monkeypatch.setattr(download_assets, 'snapshot', lambda *args: fetched.append(args))
+    download_assets.main(['asr'])
+    assert fetched == [('Qwen/Qwen3-ASR-1.7B', 'Qwen3-ASR-1.7B')]
 
 
 def test_model_download_redirect_does_not_forward_hf_credential():

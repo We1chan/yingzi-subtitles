@@ -4,6 +4,7 @@ from types import SimpleNamespace
 import pytest
 
 from app import worker, translation
+from app.config import ASR_PATH
 from app.subtitles import Cue, load_project, save_project
 
 
@@ -60,7 +61,8 @@ def test_missing_translator_keeps_english_checkpoint_and_original_only_works(tmp
 
 @pytest.mark.parametrize('segmentation, count', [({}, 1), ({'segmentation_mode': 'smart', 'max_chars': 16}, 1),
     ({'segmentation_mode': 'fixed', 'max_chars': 16}, 2), ({'max_chars': 16}, 2)])
-def test_worker_routes_selected_asr_and_aligner_and_explicit_english(tmp_path, monkeypatch, segmentation, count):
+@pytest.mark.parametrize('selected_asr', ['custom-asr', 'Qwen3-ASR-0.6B', 'cohere-transcribe-03-2026', 'parakeet-tdt-0.6b-v2-onnx'])
+def test_worker_forces_qwen_and_preserves_aligner_and_english(tmp_path, monkeypatch, segmentation, count, selected_asr):
     video = tmp_path / 'video.mp4'
     video.touch()
     seen = {}
@@ -88,62 +90,11 @@ def test_worker_routes_selected_asr_and_aligner_and_explicit_english(tmp_path, m
     monkeypatch.setattr(worker, 'load_options', lambda *args: {})
     monkeypatch.setattr(worker, 'release', lambda: None)
     monkeypatch.setattr(worker, 'event', lambda *args, **kwargs: None)
-    job = {'video': str(video), 'output': str(tmp_path), 'asr_model': str(tmp_path / 'custom-asr'), 'align_model': str(tmp_path / 'custom-align'), 'language': 'English', 'bilingual': False}
+    job = {'video': str(video), 'output': str(tmp_path), 'asr_model': str(tmp_path / selected_asr), 'align_model': str(tmp_path / 'custom-align'), 'language': 'English', 'bilingual': False}
     worker.process({**job, **segmentation})
-    assert seen == {'asr': job['asr_model'], 'align': job['align_model'], 'language': 'English'}
+    assert seen == {'asr': str(ASR_PATH.resolve()), 'align': job['align_model'], 'language': 'English'}
     data, cues = load_project(tmp_path / 'subtitles.yingziproj')
-    assert data['options']['asr_model'] == job['asr_model']
+    assert data['options']['asr_model'] == str(ASR_PATH.resolve())
     assert len(cues) == count
     assert ' '.join(cue.text for cue in cues) == 'Hello wonderful world.'
     assert data['options']['segmentation_mode'] == ('smart' if count == 1 else 'fixed')
-
-
-@pytest.mark.parametrize('name,backend,fail', [('cohere-transcribe-03-2026', 'cohere', False),
-    ('parakeet-tdt-0.6b-v2-onnx', 'parakeet', False), ('cohere-transcribe-03-2026', 'cohere', True)])
-def test_external_engine_flows_into_aligner_and_does_not_complete_after_failure(tmp_path, monkeypatch, name, backend, fail):
-    import json
-    from app import asr_process
-    video = tmp_path / 'video.mp4'
-    video.touch()
-    selected = tmp_path / name
-    calls = []
-    def records(job, wav, spans):
-        assert job['asr_model'] == str(selected)
-        assert spans == [(0, 2)]
-        yield {'type': 'record', 'index': 0, 'seconds': .25,
-            'record': {'start': 0, 'end': 2, 'text': 'Hello world.', 'language': 'English'}}
-        if fail:
-            raise RuntimeError('child failed')
-    class Aligner:
-        @staticmethod
-        def from_pretrained(path, **kwargs):
-            calls.append(path)
-            return Aligner()
-        def align(self, **kwargs):
-            return [SimpleNamespace(items=[SimpleNamespace(text='Hello', start_time=.1, end_time=.7),
-                SimpleNamespace(text='world', start_time=.7, end_time=1.5)])]
-    monkeypatch.setitem(sys.modules, 'qwen_asr', SimpleNamespace(Qwen3ForcedAligner=Aligner))
-    monkeypatch.setattr(asr_process, 'external_records', records)
-    monkeypatch.setattr(worker, 'model_issue', lambda *args: '')
-    monkeypatch.setattr(worker, 'extra_runtime_ready', lambda: True)
-    monkeypatch.setattr(worker, 'extract_audio', lambda *args: 2)
-    monkeypatch.setattr(worker, 'speech_chunks', lambda *args, **kwargs: [(0, 2)])
-    monkeypatch.setattr(worker, 'read_span', lambda *args: None)
-    monkeypatch.setattr(worker, 'load_options', lambda *args: {})
-    monkeypatch.setattr(worker, 'release', lambda: None)
-    monkeypatch.setattr(worker, 'event', lambda *args, **kwargs: None)
-    job = {'video': str(video), 'output': str(tmp_path), 'asr_model': str(selected),
-        'language': 'English', 'bilingual': False}
-    if fail:
-        with pytest.raises(RuntimeError, match='child failed'):
-            worker.process(job)
-        assert load_project(tmp_path / 'subtitles.yingziproj')[0]['status'] == 'recognizing'
-        assert not calls
-    else:
-        worker.process(job)
-        data, cues = load_project(tmp_path / 'subtitles.yingziproj')
-        assert data['status'] == 'complete' and calls
-        assert cues[0].text == 'Hello world.' and cues[0].start == .1
-    record = json.loads((tmp_path / 'recognition.json').read_text(encoding='utf-8'))
-    assert record['backend'] == backend
-    assert record['records'][0]['inference_seconds'] == .25

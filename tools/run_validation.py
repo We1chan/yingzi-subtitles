@@ -16,7 +16,6 @@ def main():
     sys.stdout.reconfigure(encoding='utf-8')
     parser = argparse.ArgumentParser()
     parser.add_argument('--languages', nargs='+', choices=['chinese', 'japanese', 'english'], default=['chinese', 'japanese', 'english'])
-    parser.add_argument('--asr-model', help='Optional local ASR model directory')
     parser.add_argument('--seconds', type=int, default=16, help='Test video length')
     parser.add_argument('--device', choices=['auto', 'cpu'], default='auto')
     args = parser.parse_args()
@@ -39,16 +38,14 @@ def main():
         if name not in args.languages:
             continue
         source = fixtures / (name + ('.mp3' if name == 'japanese' else '.wav'))
-        tag = name + ('-' + Path(args.asr_model).name if args.asr_model else '') + ('-cpu' if args.device == 'cpu' else '')
+        tag = name + ('-cpu' if args.device == 'cpu' else '')
         video = fixtures / f'{tag}-{args.seconds}s-test.mp4'
         run_ffmpeg(['-y', '-f', 'lavfi', '-i', 'color=c=0x142a35:s=1280x720:r=24', '-i', source, '-t', str(args.seconds), '-c:v', 'libx264', '-preset', 'ultrafast', '-c:a', 'aac', '-shortest', video])
         folder = {'chinese': '验证_中文', 'japanese': '验证_日中双语', 'english': '验证_英中双语'}[name]
-        out = PROJECTS / (folder + ('_' + Path(args.asr_model).name if args.asr_model else ''))
+        out = PROJECTS / folder
         if args.device == 'cpu':
             out = out.with_name(out.name + '_CPU')
         job = {'video': str(video), 'output': str(out), 'language': language, 'bilingual': bilingual, 'track': 0, 'device': args.device, 'max_chars': 68 if language == 'English' else 30}
-        if args.asr_model:
-            job['asr_model'] = str(Path(args.asr_model).resolve())
         path = ROOT / f'tests/fixtures/job-{name}.json'
         path.write_text(json.dumps(job, ensure_ascii=False), encoding='utf-8')
         with (ROOT / f'logs/{tag}-events.jsonl').open('wb', buffering=0) as events, (ROOT / f'logs/{tag}-error.log').open('wb', buffering=0) as errors:

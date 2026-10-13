@@ -169,6 +169,8 @@ def test_dialog_dynamic_controls_estimates_and_project_restore(application, tmp_
     run_ffmpeg(['-y', '-f', 'lavfi', '-i', 'color=s=160x90:d=1', '-c:v', 'libx264', video])
     dialog = ExportDialog(video, '原文字幕')
     dialog.show()
+    assert dialog.advanced_settings.isHidden()
+    dialog.advanced_toggle.click()
     for _ in range(100):
         QTest.qWait(20)
         if dialog.info is not None:
@@ -198,4 +200,39 @@ def test_dialog_dynamic_controls_estimates_and_project_restore(application, tmp_
     controls['rate_mode'].setCurrentIndex(controls['rate_mode'].findData('quality'))
     assert '可能明显大于源文件' in dialog.estimate_label.text()
     assert not dialog.bitrate.isVisible() and controls['crf'].isVisible()
+    dialog.close()
+
+
+def test_simple_export_keeps_defaults_and_syncs_size_with_advanced_settings(application, tmp_path, info):
+    from app.export_dialog import ExportDialog
+    video = tmp_path / 'source.mp4'
+    run_ffmpeg(['-v', 'error', '-f', 'lavfi', '-i', 'color=s=160x90:d=1', '-c:v', 'libx264', video])
+    dialog = ExportDialog(video, '双语字幕')
+    dialog.stop_probe()
+    dialog.set_source_info(info)
+    assert dialog.advanced_settings.isHidden() and dialog.save_button.isEnabled()
+    assert dialog.settings() == normalize_settings()
+    dialog.resolution_choice.setCurrentIndex(dialog.resolution_choice.findData('720'))
+    assert dialog.settings()['resolution'] == '720'
+    dialog.advanced_toggle.click()
+    dialog.controls['resolution'].setCurrentIndex(dialog.controls['resolution'].findData('1080'))
+    assert dialog.resolution_choice.currentData() == '1080'
+    before = dialog.settings()
+    dialog.advanced_toggle.click()
+    assert dialog.advanced_settings.isHidden() and dialog.settings() == before
+    dialog.close()
+
+
+def test_saved_custom_export_settings_remain_visible_and_survive_collapsing(application, tmp_path, info):
+    from app.export_dialog import ExportDialog
+    video = tmp_path / 'source.mp4'
+    run_ffmpeg(['-v', 'error', '-f', 'lavfi', '-i', 'color=s=160x90:d=1', '-c:v', 'libx264', video])
+    settings = normalize_settings({'codec': 'hevc', 'rate_mode': 'bitrate', 'video_bitrate': 6500,
+                                   'audio_mode': 'aac', 'audio_bitrate': 192})
+    dialog = ExportDialog(video, '原文字幕', settings)
+    dialog.stop_probe()
+    dialog.set_source_info(info)
+    assert dialog.advanced_toggle.isChecked() and dialog.settings() == settings
+    dialog.advanced_toggle.click()
+    assert dialog.advanced_settings.isHidden() and dialog.settings() == settings
     dialog.close()
